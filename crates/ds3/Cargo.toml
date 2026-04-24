@@ -1,0 +1,25 @@
+[package]
+name    = "ds3"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "ds3"
+path = "src/main.rs"
+
+[dependencies]
+ds3-core  = { workspace = true }
+ds3-model = { workspace = true }
+clap      = { workspace = true }
+anyhow    = { workspace = true }
+log       = { workspace = true }
+env_logger= { workspace = true }
+walkdir   = "2"
+rayon     = { workspace = true }
+tch       = "0.17"
+
+[features]
+default   = []
+# Enable native POD5 reading (pure Rust, no libpod5 required).
+# Pass through to ds3-core: cargo build --features pod5-pure
+pod5-pure = ["ds3-core/pod5-pure"]

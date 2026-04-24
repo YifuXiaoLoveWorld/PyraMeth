@@ -1,0 +1,33 @@
+[package]
+name    = "ds3-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# bioinformatics file I/O
+noodles     = { version = "0.85", features = ["bam", "sam", "bgzf", "fasta"] }
+# numerical / signal processing
+ndarray     = "0.16"
+# error handling
+thiserror   = { workspace = true }
+# logging
+log         = { workspace = true }
+# parallelism
+rayon       = { workspace = true }
+crossbeam-channel = { workspace = true }
+# uuid for read IDs
+uuid        = { version = "1", features = ["v4"] }
+
+# ── optional: native POD5 reading ────────────────────────────────────────────
+# Pure-Rust; no C library required.  Uses:
+#   pod5-format — FlatBuffers footer parsing (correct POD5 spec)
+#   svb16       — signal decompression (zstd + streamvbyte + zigzag + delta)
+#   arrow       — Arrow IPC file-format reader for reads/signal tables
+# Enable with: cargo build --features pod5-pure
+pod5-format = { git = "https://github.com/bsaintjo/pod5-rs", optional = true }
+svb16       = { git = "https://github.com/bsaintjo/pod5-rs", optional = true }
+arrow       = { version = "54", features = ["ipc"], optional = true }
+
+[features]
+default   = []
+pod5-pure = ["dep:pod5-format", "dep:svb16", "dep:arrow"]

@@ -1,0 +1,25 @@
+[package]
+name    = "ds3-model"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ds3-core          = { workspace = true }
+thiserror         = { workspace = true }
+log               = { workspace = true }
+crossbeam-channel = { workspace = true }
+rayon             = { workspace = true }
+
+# PyTorch / LibTorch bindings.
+# Requires LIBTORCH env var pointing to a LibTorch installation.
+# Download: https://pytorch.org/  (C++ / LibTorch tab)
+# Example (Linux/macOS):
+#   export LIBTORCH=/path/to/libtorch
+#   export LD_LIBRARY_PATH=$LIBTORCH/lib:$LD_LIBRARY_PATH
+# Example (Windows):
+#   set LIBTORCH=C:\libtorch
+#   set PATH=%LIBTORCH%\lib;%PATH%
+tch      = "0.17"
+walkdir  = "2"
+anyhow   = { workspace = true }
+env_logger= { workspace = true }

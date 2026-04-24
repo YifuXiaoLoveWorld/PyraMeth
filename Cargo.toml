@@ -1,0 +1,21 @@
+[workspace]
+members  = ["crates/ds3-core", "crates/ds3-model", "crates/ds3"]
+resolver = "2"
+
+# ── workspace-wide shared dependency versions ────────────────────────────────
+[workspace.dependencies]
+thiserror         = "1"
+anyhow            = "1"
+log               = "0.4"
+env_logger        = "0.11"
+crossbeam-channel = "0.5"
+rayon             = "1"
+clap              = { version = "4", features = ["derive"] }
+ds3-core          = { path = "crates/ds3-core" }
+ds3-model         = { path = "crates/ds3-model" }
+
+# ── release profile: maximise throughput ────────────────────────────────────
+[profile.release]
+opt-level     = 3
+lto           = "thin"
+codegen-units = 1
