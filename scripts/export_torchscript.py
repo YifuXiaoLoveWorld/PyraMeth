@@ -62,7 +62,7 @@ def export_mtm(args):
         temporal_depth= args.mtm_temporal_depth,
     )
 
-    ckpt = torch.load(args.model_path, map_location="cpu")
+    ckpt = torch.load(args.model_path, map_location="cpu", weights_only=True)
     # Strip DDP / torch.compile prefixes
     clean = {k.replace("_orig_mod.", "").replace("module.", ""): v for k, v in ckpt.items()}
     model.load_state_dict(clean, strict=True)
@@ -115,7 +115,7 @@ def export_bilstm(args):
         module         = "both_bilstm",
     )
 
-    ckpt = torch.load(args.model_path, map_location="cpu")
+    ckpt = torch.load(args.model_path, map_location="cpu", weights_only=True)
     clean = {k.replace("_orig_mod.", "").replace("module.", ""): v for k, v in ckpt.items()}
     model.load_state_dict(clean, strict=True)
     model.eval()
