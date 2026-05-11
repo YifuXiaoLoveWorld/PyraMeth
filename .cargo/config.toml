@@ -7,9 +7,3 @@ LIBTORCH_CXX11_ABI = "0"
 # Must match the cuda-runtime version in the deepsignalx conda env (12.1.x).
 TORCH_CUDA_VERSION = "12.1"
 
-[target.x86_64-unknown-linux-gnu]
-# Prevent the linker from dropping libtorch_cuda.so via --as-needed.
-# Without this, the linker omits the library because no Rust symbols
-# directly reference it — but its static initializers must run to
-# register PyTorch's CUDA backend before tch::Cuda::device_count().
-rustflags = ["-C", "link-arg=-Wl,--no-as-needed"]
