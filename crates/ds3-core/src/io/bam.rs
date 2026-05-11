@@ -6,14 +6,14 @@
 use std::{
     collections::HashMap,
     fs::File,
-    io::{BufReader, Seek, SeekFrom},
+    io::{BufReader, Seek},
     path::Path,
 };
 
 use noodles::{
     bam,
     bgzf::VirtualPosition,
-    sam::alignment::record::{data::field::Tag, Flags},
+    sam::alignment::record::data::field::Tag,
 };
 
 use crate::{
@@ -342,7 +342,7 @@ fn decode_record(
 
 /// Decode the `mv` tag into (stride, movetable).
 fn decode_mv_tag(
-    data: &noodles::sam::alignment::record::Data,
+    data: &impl noodles::sam::alignment::record::Data,
     read_id: &str,
 ) -> Result<(usize, Vec<i32>)> {
     use noodles::sam::alignment::record::data::field::Value;
@@ -376,7 +376,7 @@ fn decode_mv_tag(
 
 /// Get an integer tag value, returning an error if absent.
 fn get_tag_i64(
-    data: &noodles::sam::alignment::record::Data,
+    data: &impl noodles::sam::alignment::record::Data,
     tag: Tag,
     read_id: &str,
     tag_name: &'static str,
@@ -401,7 +401,7 @@ fn get_tag_i64(
 
 /// Get an optional integer tag value, returning `None` if absent.
 fn get_tag_i64_opt(
-    data: &noodles::sam::alignment::record::Data,
+    data: &impl noodles::sam::alignment::record::Data,
     tag: Tag,
 ) -> Option<i64> {
     use noodles::sam::alignment::record::data::field::Value;
