@@ -130,8 +130,13 @@ mod native {
             let sr_idx = schema
                 .index_of("signal_rows")
                 .or_else(|_| schema.index_of("signal_row_count"))
+                .or_else(|_| schema.index_of("signal"))
                 .map_err(|_| {
-                    Ds3Error::SignalFile("reads table missing 'signal_rows' column".into())
+                    let cols: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+                    Ds3Error::SignalFile(format!(
+                        "reads table missing signal-rows column; available columns: {:?}",
+                        cols
+                    ))
                 })?;
 
             let rid_col = batch.column(rid_idx);
