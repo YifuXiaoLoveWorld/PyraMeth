@@ -209,7 +209,7 @@ fn get_parent_id(
     // Try pi tag first
     if let Some(Ok(field)) = record.data().get(&TAG_PI) {
         if let noodles::sam::alignment::record::data::field::Value::String(s) = field {
-            return Ok(s.to_str_lossy().into_owned());
+            return Ok(String::from_utf8_lossy(&**s).into_owned());
         }
     }
     // Fall back to query name
@@ -355,20 +355,26 @@ fn decode_mv_tag(
 
     let values: Vec<i32> = match field {
         Value::Array(arr) => {
-            use noodles::sam::alignment::record::data::field::value::Array as Arr;
-            macro_rules! to_i32 {
-                ($it:expr) => {
-                    $it.map(|r| r.map(|x| x as i32).map_err(|e| Ds3Error::Noodles(e.to_string())))
-                        .collect::<Result<Vec<_>>>()?
-                };
-            }
+            use noodles::sam::alignment::record::data::field::value::{array::Values, Array as Arr};
             match arr {
-                Arr::Int8(it)   => to_i32!(it),
-                Arr::UInt8(it)  => to_i32!(it),
-                Arr::Int16(it)  => to_i32!(it),
-                Arr::UInt16(it) => to_i32!(it),
-                Arr::Int32(it)  => to_i32!(it),
-                Arr::UInt32(it) => to_i32!(it),
+                Arr::Int8(it) => Box::<dyn Values<'_, i8>>::map(it,
+                    |r: std::io::Result<i8>| r.map(|x| x as i32).map_err(|e: std::io::Error| Ds3Error::Noodles(e.to_string()))
+                ).collect::<Result<Vec<_>>>()?,
+                Arr::UInt8(it) => Box::<dyn Values<'_, u8>>::map(it,
+                    |r: std::io::Result<u8>| r.map(|x| x as i32).map_err(|e: std::io::Error| Ds3Error::Noodles(e.to_string()))
+                ).collect::<Result<Vec<_>>>()?,
+                Arr::Int16(it) => Box::<dyn Values<'_, i16>>::map(it,
+                    |r: std::io::Result<i16>| r.map(|x| x as i32).map_err(|e: std::io::Error| Ds3Error::Noodles(e.to_string()))
+                ).collect::<Result<Vec<_>>>()?,
+                Arr::UInt16(it) => Box::<dyn Values<'_, u16>>::map(it,
+                    |r: std::io::Result<u16>| r.map(|x| x as i32).map_err(|e: std::io::Error| Ds3Error::Noodles(e.to_string()))
+                ).collect::<Result<Vec<_>>>()?,
+                Arr::Int32(it) => Box::<dyn Values<'_, i32>>::map(it,
+                    |r: std::io::Result<i32>| r.map_err(|e: std::io::Error| Ds3Error::Noodles(e.to_string()))
+                ).collect::<Result<Vec<_>>>()?,
+                Arr::UInt32(it) => Box::<dyn Values<'_, u32>>::map(it,
+                    |r: std::io::Result<u32>| r.map(|x| x as i32).map_err(|e: std::io::Error| Ds3Error::Noodles(e.to_string()))
+                ).collect::<Result<Vec<_>>>()?,
                 _ => return Err(Ds3Error::MissingTag { read_id: read_id.to_string(), tag: "mv" }),
             }
         }
