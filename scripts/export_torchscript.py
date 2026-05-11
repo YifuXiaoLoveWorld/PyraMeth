@@ -44,6 +44,26 @@ from deepsignal3.models import AggrAttRNN, ModelBiLSTM, modelMTM  # type: ignore
 # MTM export
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _trace_device(args):
+    """
+    Select the device used for tracing.
+
+    torch.jit.trace freezes the device of every runtime op (e.g. torch.arange)
+    into the saved model.  The traced model must therefore be traced on the
+    *same* kind of device as it will run on at inference time:
+      - traced on CPU → internal arange tensors frozen as cpu → works only on CPU
+      - traced on CUDA → internal arange tensors frozen as cuda:0 → works on GPU
+
+    Rule: trace on CUDA when CUDA is available, unless --force-cpu-export is set.
+    """
+    if args.force_cpu_export or not torch.cuda.is_available():
+        dev = torch.device("cpu")
+    else:
+        dev = torch.device("cuda")
+    print(f"Tracing device: {dev}")
+    return dev
+
+
 def export_mtm(args):
     """Trace and save a modelMTM checkpoint as TorchScript."""
     print(f"Loading modelMTM checkpoint: {args.model_path}")
@@ -68,17 +88,20 @@ def export_mtm(args):
     model.load_state_dict(clean, strict=True)
     model.eval()
 
-    # ── Build representative dummy inputs ─────────────────────────────────
+    dev = _trace_device(args)
+    model = model.to(dev)
+
+    # ── Build representative dummy inputs on the same device ──────────────
     B   = 2          # batch size (tracing; any B ≥ 1 works)
     L   = args.seq_len
     S   = args.signal_len
     LS  = L * S      # flattened signal time steps
 
-    signals  = torch.randn(B, LS, 1)             # (B, L*S, 1)
-    kmer_exp = torch.randint(0, args.n_vocab, (B, LS))  # (B, L*S)
-    x_mask   = torch.zeros(B, LS, 1 + args.n_embed, dtype=torch.bool)
-    tpos     = torch.arange(LS).unsqueeze(0).expand(B, -1)
-    x_static = torch.zeros(B, 1, dtype=torch.long)
+    signals  = torch.randn(B, LS, 1, device=dev)
+    kmer_exp = torch.randint(0, args.n_vocab, (B, LS), device=dev)
+    x_mask   = torch.zeros(B, LS, 1 + args.n_embed, dtype=torch.bool, device=dev)
+    tpos     = torch.arange(LS, device=dev).unsqueeze(0).expand(B, -1)
+    x_static = torch.zeros(B, 1, dtype=torch.long, device=dev)
 
     print("Tracing model …")
     with torch.no_grad():
@@ -120,16 +143,19 @@ def export_bilstm(args):
     model.load_state_dict(clean, strict=True)
     model.eval()
 
-    # ── Dummy inputs ──────────────────────────────────────────────────────
+    dev = _trace_device(args)
+    model = model.to(dev)
+
+    # ── Dummy inputs on the same device ──────────────────────────────────
     B = 2
     L = args.seq_len
     S = args.signal_len
 
-    kmers   = torch.randint(0, args.n_vocab, (B, L)).long()
-    means   = torch.randn(B, L)
-    stds    = torch.rand(B, L).abs()
-    lens    = torch.randint(1, 20, (B, L)).float()
-    signals = torch.randn(B, L, S)
+    kmers   = torch.randint(0, args.n_vocab, (B, L), device=dev).long()
+    means   = torch.randn(B, L, device=dev)
+    stds    = torch.rand(B, L, device=dev).abs()
+    lens    = torch.randint(1, 20, (B, L), device=dev).float()
+    signals = torch.randn(B, L, S, device=dev)
 
     print("Tracing model …")
     with torch.no_grad():
@@ -233,6 +259,8 @@ def main():
     p.add_argument("--output_path", "-o", required=True, help="output .pt file path")
     p.add_argument("--model_class", default="mtm", choices=["mtm", "bilstm", "aggr"],
                    help="model architecture")
+    p.add_argument("--force-cpu-export", action="store_true", dest="force_cpu_export",
+                   help="trace on CPU even when a GPU is available (produces a CPU-only model)")
 
     # Shared hyper-params
     p.add_argument("--seq_len",      type=int,   default=21)

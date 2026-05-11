@@ -92,7 +92,14 @@ pub fn run_batch_mtm(
 
         let logits = model
             .forward_ts(&[signals_clean, kmer_expand.shallow_clone(), x_mask, tpos, x_static])
-            .expect("modelMTM forward failed");
+            .unwrap_or_else(|e| {
+                // Common cause: model was traced on CPU but loaded on GPU (or vice-versa).
+                // Re-export with `python export_torchscript.py` on the same device type.
+                panic!("modelMTM forward failed: {e}\n\
+                    Hint: if the error mentions 'device mismatch' or 'cuda:0 and cpu', \
+                    re-export the model with `python scripts/export_torchscript.py` \
+                    while a GPU is available so the trace freezes CUDA device tensors.");
+            });
 
         let probs = logits.softmax(-1, Kind::Float).to(Device::Cpu);
         let pred  = logits.argmax(1, false).to(Device::Cpu);
@@ -157,7 +164,11 @@ pub fn run_batch_bilstm(
         // BiLSTM forward returns (logits, softmax_probs) — we use index 1
         let out = model
             .forward_ts(&[kmers.shallow_clone(), means, stds, lens, signals])
-            .expect("BiLSTM forward failed");
+            .unwrap_or_else(|e| {
+                panic!("BiLSTM forward failed: {e}\n\
+                    Hint: if the error mentions 'device mismatch', re-export the model \
+                    with `python scripts/export_torchscript.py` while a GPU is available.");
+            });
         // TorchScript returns a tuple; index 1 = softmax probs
         let probs = out.get(1).softmax(-1, Kind::Float).to(Device::Cpu);
         let pred  = probs.argmax(1, false).to(Device::Cpu);
