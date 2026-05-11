@@ -59,8 +59,9 @@ pub struct AlnRecord {
     /// 0-based reference end (exclusive), computed from CIGAR.
     pub ref_end: i64,
 
-    /// Start and end of the aligned portion within the *forward* sequence.
+    /// Start of the aligned portion within the *forward* sequence.
     pub qa_start: usize,
+    /// End of the aligned portion within the *forward* sequence.
     pub qa_end: usize,
 
     /// Decoded CIGAR tuples in the order they appear in the BAM record.
