@@ -355,26 +355,21 @@ fn decode_mv_tag(
 
     let values: Vec<i32> = match field {
         Value::Array(arr) => {
-            use noodles::sam::alignment::record::data::field::value::{array::Values, Array as Arr};
+            use noodles::sam::alignment::record::data::field::value::Array as Arr;
+            macro_rules! to_i32 {
+                ($vals:expr) => {
+                    $vals.iter()
+                        .map(|r| r.map(|x| x as i32).map_err(|e| Ds3Error::Noodles(e.to_string())))
+                        .collect::<Result<Vec<_>>>()?
+                };
+            }
             match arr {
-                Arr::Int8(it) => Box::<dyn Values<'_, i8>>::map(it,
-                    |r: std::io::Result<i8>| r.map(|x| x as i32).map_err(|e: std::io::Error| Ds3Error::Noodles(e.to_string()))
-                ).collect::<Result<Vec<_>>>()?,
-                Arr::UInt8(it) => Box::<dyn Values<'_, u8>>::map(it,
-                    |r: std::io::Result<u8>| r.map(|x| x as i32).map_err(|e: std::io::Error| Ds3Error::Noodles(e.to_string()))
-                ).collect::<Result<Vec<_>>>()?,
-                Arr::Int16(it) => Box::<dyn Values<'_, i16>>::map(it,
-                    |r: std::io::Result<i16>| r.map(|x| x as i32).map_err(|e: std::io::Error| Ds3Error::Noodles(e.to_string()))
-                ).collect::<Result<Vec<_>>>()?,
-                Arr::UInt16(it) => Box::<dyn Values<'_, u16>>::map(it,
-                    |r: std::io::Result<u16>| r.map(|x| x as i32).map_err(|e: std::io::Error| Ds3Error::Noodles(e.to_string()))
-                ).collect::<Result<Vec<_>>>()?,
-                Arr::Int32(it) => Box::<dyn Values<'_, i32>>::map(it,
-                    |r: std::io::Result<i32>| r.map_err(|e: std::io::Error| Ds3Error::Noodles(e.to_string()))
-                ).collect::<Result<Vec<_>>>()?,
-                Arr::UInt32(it) => Box::<dyn Values<'_, u32>>::map(it,
-                    |r: std::io::Result<u32>| r.map(|x| x as i32).map_err(|e: std::io::Error| Ds3Error::Noodles(e.to_string()))
-                ).collect::<Result<Vec<_>>>()?,
+                Arr::Int8(v)   => to_i32!(v),
+                Arr::UInt8(v)  => to_i32!(v),
+                Arr::Int16(v)  => to_i32!(v),
+                Arr::UInt16(v) => to_i32!(v),
+                Arr::Int32(v)  => to_i32!(v),
+                Arr::UInt32(v) => to_i32!(v),
                 _ => return Err(Ds3Error::MissingTag { read_id: read_id.to_string(), tag: "mv" }),
             }
         }
