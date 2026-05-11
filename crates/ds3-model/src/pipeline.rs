@@ -23,7 +23,10 @@ use std::{
     fs::File,
     io::{BufWriter, Write},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
     thread,
 };
 
@@ -418,6 +421,13 @@ fn signal_producers(
     let batch_size = cfg.batch_size;
     let model_class = cfg.model_class;
 
+    // Diagnostic counters (shared across rayon shards)
+    let n_reads_total    = Arc::new(AtomicUsize::new(0));
+    let n_reads_no_bam   = Arc::new(AtomicUsize::new(0));
+    let n_reads_bam_err  = Arc::new(AtomicUsize::new(0));
+    let n_feat_extracted = Arc::new(AtomicUsize::new(0));
+    let n_feat_err       = Arc::new(AtomicUsize::new(0));
+
     // Distribute files across nproc_io rayon threads
     signal_files
         .par_chunks(
@@ -426,9 +436,14 @@ fn signal_producers(
         .enumerate()
         .try_for_each(|(shard_id, files)| -> anyhow::Result<()> {
             // Each shard gets its own BAM reader (cloned index, separate file handle)
-            let bam = bam_index.clone();
+            let bam  = bam_index.clone();
             let args = ext_args.clone();
-            let ft = file_type.to_string();
+            let ft   = file_type.to_string();
+            let cnt_total   = n_reads_total.clone();
+            let cnt_no_bam  = n_reads_no_bam.clone();
+            let cnt_bam_err = n_reads_bam_err.clone();
+            let cnt_feat    = n_feat_extracted.clone();
+            let cnt_feat_err = n_feat_err.clone();
 
             // Round-robin GPU assignment for this shard
             let tx = &batch_txs[shard_id % n_workers];
@@ -444,33 +459,61 @@ fn signal_producers(
                 };
 
                 for (read_id, signal) in &signal_map {
+                    cnt_total.fetch_add(1, Ordering::Relaxed);
+
                     let alignments = match bam.get_alignments(read_id) {
+                        Ok(a) if a.is_empty() => {
+                            cnt_no_bam.fetch_add(1, Ordering::Relaxed);
+                            continue;
+                        }
                         Ok(a) => a,
-                        Err(_) => continue,
+                        Err(e) => {
+                            let prev = cnt_bam_err.fetch_add(1, Ordering::Relaxed);
+                            // Log the first 5 distinct errors so the user can diagnose
+                            if prev < 5 {
+                                log::warn!("read {read_id}: BAM decode error — {e}");
+                            }
+                            continue;
+                        }
                     };
+
                     for aln in &alignments {
                         match model_class {
                             ModelClass::Mtm => {
-                                if let Ok(feats) = ds3_core::features::process_data_mtm(
-                                    signal, aln, &args,
-                                ) {
-                                    mtm_batch.extend(feats);
-                                    if mtm_batch.len() >= batch_size {
-                                        let _ = tx.send(Some(Batch::Mtm(
-                                            std::mem::replace(&mut mtm_batch, Vec::with_capacity(batch_size)),
-                                        )));
+                                match ds3_core::features::process_data_mtm(signal, aln, &args) {
+                                    Ok(feats) => {
+                                        cnt_feat.fetch_add(feats.len(), Ordering::Relaxed);
+                                        mtm_batch.extend(feats);
+                                        if mtm_batch.len() >= batch_size {
+                                            let _ = tx.send(Some(Batch::Mtm(
+                                                std::mem::replace(&mut mtm_batch, Vec::with_capacity(batch_size)),
+                                            )));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let prev = cnt_feat_err.fetch_add(1, Ordering::Relaxed);
+                                        if prev < 5 {
+                                            log::warn!("read {}: feature extraction error — {e}", aln.read_id);
+                                        }
                                     }
                                 }
                             }
                             ModelClass::BiLstm => {
-                                if let Ok(feats) = ds3_core::features::process_data_bilstm(
-                                    signal, aln, &args,
-                                ) {
-                                    bilstm_batch.extend(feats);
-                                    if bilstm_batch.len() >= batch_size {
-                                        let _ = tx.send(Some(Batch::BiLstm(
-                                            std::mem::replace(&mut bilstm_batch, Vec::with_capacity(batch_size)),
-                                        )));
+                                match ds3_core::features::process_data_bilstm(signal, aln, &args) {
+                                    Ok(feats) => {
+                                        cnt_feat.fetch_add(feats.len(), Ordering::Relaxed);
+                                        bilstm_batch.extend(feats);
+                                        if bilstm_batch.len() >= batch_size {
+                                            let _ = tx.send(Some(Batch::BiLstm(
+                                                std::mem::replace(&mut bilstm_batch, Vec::with_capacity(batch_size)),
+                                            )));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let prev = cnt_feat_err.fetch_add(1, Ordering::Relaxed);
+                                        if prev < 5 {
+                                            log::warn!("read {}: feature extraction error — {e}", aln.read_id);
+                                        }
                                     }
                                 }
                             }
@@ -489,6 +532,29 @@ fn signal_producers(
 
             Ok(())
         })?;
+
+    // ── extraction summary ────────────────────────────────────────────────
+    let total    = n_reads_total.load(Ordering::Relaxed);
+    let no_bam   = n_reads_no_bam.load(Ordering::Relaxed);
+    let bam_err  = n_reads_bam_err.load(Ordering::Relaxed);
+    let feats    = n_feat_extracted.load(Ordering::Relaxed);
+    let feat_err = n_feat_err.load(Ordering::Relaxed);
+    log::info!(
+        "Feature extraction done: {} signal reads scanned, \
+         {} not in BAM, {} BAM decode errors, \
+         {} features extracted, {} feature errors.",
+        total, no_bam, bam_err, feats, feat_err,
+    );
+    if feats == 0 {
+        log::warn!(
+            "No features extracted! Possible causes:\n  \
+             1. BAM missing 'mv' or 'ts' tags (run basecaller with --moves flag)\n  \
+             2. Read IDs in signal files do not match BAM read names\n  \
+             3. All reads filtered by mapq/coverage_ratio/identity thresholds\n  \
+             4. Motif '{}' not found in any aligned region",
+            cfg.motifs,
+        );
+    }
 
     Ok(())
 }
