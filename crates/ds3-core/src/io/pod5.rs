@@ -88,7 +88,7 @@ mod native {
             .map_err(|e| Ds3Error::SignalFile(format!("cannot open {:?}: {e}", path)))?;
 
         // pod5-format parses the FlatBuffers footer and returns section offsets.
-        let footer = ParsedFooter::from_reader(&mut file)
+        let footer = ParsedFooter::read_footer(&mut file)
             .map_err(|e| Ds3Error::SignalFile(format!("POD5 footer parse error: {e}")))?;
 
         let reads_meta   = load_reads_table(&mut file, &footer)?;
@@ -299,7 +299,7 @@ mod native {
                 let (ref compressed, sample_count) = signal_table.rows[row];
                 // svb16::decode handles the full VBZ pipeline:
                 //   zstd → StreamVByte16 → zigzag → delta → Vec<i16>
-                let chunk = svb16::decode(compressed, *sample_count as usize)
+                let chunk = svb16::decode(compressed, sample_count as usize)
                     .map_err(|e| {
                         Ds3Error::SignalFile(format!(
                             "VBZ decompression failed (row {row}): {e}"
