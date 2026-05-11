@@ -1,0 +1,5 @@
+[env]
+# PyTorch conda package is built with _GLIBCXX_USE_CXX11_ABI=0.
+# torch-sys must match this ABI or symbols in libc10.so / libtorch.so
+# will not be found at link time.
+LIBTORCH_CXX11_ABI = "0"
