@@ -95,8 +95,8 @@ pub struct CallModsArgs {
 }
 
 pub fn run(args: CallModsArgs) -> anyhow::Result<()> {
-    let model_class: ModelClass = args.model_class.parse()?;
-    let normalize_method: NormalizeMethod = args.normalize_method.parse()?;
+    let model_class: ModelClass = args.model_class.parse().map_err(anyhow::Error::msg)?;
+    let normalize_method: NormalizeMethod = args.normalize_method.parse().map_err(anyhow::Error::msg)?;
 
     let cfg = InferenceConfig {
         model_path:       args.model_path,

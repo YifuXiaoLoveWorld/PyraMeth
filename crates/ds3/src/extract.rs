@@ -96,7 +96,7 @@ pub struct ExtractArgs {
 // ─── entry point ─────────────────────────────────────────────────────────────
 
 pub fn run(args: ExtractArgs) -> anyhow::Result<()> {
-    let normalize_method: NormalizeMethod = args.normalize_method.parse()?;
+    let normalize_method: NormalizeMethod = args.normalize_method.parse().map_err(anyhow::Error::msg)?;
     let motif_seqs = get_motif_seqs(&args.motifs);
 
     // Load optional position filter
