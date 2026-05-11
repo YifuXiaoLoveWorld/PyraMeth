@@ -19,7 +19,7 @@ rayon             = { workspace = true }
 # Example (Windows):
 #   set LIBTORCH=C:\libtorch
 #   set PATH=%LIBTORCH%\lib;%PATH%
-tch      = "0.17"
+tch      = "0.18"
 walkdir  = "2"
 anyhow   = { workspace = true }
 env_logger= { workspace = true }

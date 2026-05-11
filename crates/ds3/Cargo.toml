@@ -16,7 +16,7 @@ log       = { workspace = true }
 env_logger= { workspace = true }
 walkdir   = "2"
 rayon     = { workspace = true }
-tch       = "0.17"
+tch       = "0.18"
 
 [features]
 default   = []
