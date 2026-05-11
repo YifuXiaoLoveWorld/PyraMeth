@@ -231,7 +231,7 @@ fn gpu_worker(
     result_tx: Sender<Option<Vec<ResultLine>>>,
 ) {
     log::info!("[Worker-{rank}({device:?})] loading model …");
-    let model = tch::CModule::load_on_device(model_path, device)
+    let mut model = tch::CModule::load_on_device(model_path, device)
         .unwrap_or_else(|e| panic!("[Worker-{rank}] failed to load model: {e}"));
     model.set_eval();
     log::info!("[Worker-{rank}({device:?})] model loaded.");
@@ -239,7 +239,7 @@ fn gpu_worker(
     // ── batch buffers ─────────────────────────────────────────────────────
     let mut mtm_buf:    Vec<MtmFeature>    = Vec::with_capacity(batch_size);
     let mut bilstm_buf: Vec<BiLstmFeature> = Vec::with_capacity(batch_size);
-    let mut end_count = 0usize;
+    let mut _end_count = 0usize;
 
     let flush_mtm = |buf: &mut Vec<MtmFeature>| -> Vec<ResultLine> {
         if buf.is_empty() { return Vec::new(); }
@@ -259,7 +259,7 @@ fn gpu_worker(
         let item = rx.recv().unwrap_or(None);
 
         if item.is_none() {
-            end_count += 1;
+            _end_count += 1;
             // Python sends one None per IO producer per GPU queue
             // We mirror the same count: break when all producers have sent None
             // (The pipeline sends cfg.nproc_io Nones per GPU channel)
