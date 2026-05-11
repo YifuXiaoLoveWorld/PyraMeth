@@ -101,9 +101,9 @@ pub fn run_batch_mtm(
     });
 
     // ── decode outputs ────────────────────────────────────────────────────
-    let probs_data: Vec<f32> = Vec::from(probs.flatten(0, -1));
-    let pred_data:  Vec<i64> = Vec::from(pred.flatten(0, -1));
-    let kmers_data: Vec<i64> = Vec::from(kmers_cpu.flatten(0, -1));
+    let probs_data: Vec<f32> = Vec::try_from(probs.flatten(0, -1)).expect("probs tensor conversion failed");
+    let pred_data:  Vec<i64> = Vec::try_from(pred.flatten(0, -1)).expect("pred tensor conversion failed");
+    let kmers_data: Vec<i64> = Vec::try_from(kmers_cpu.flatten(0, -1)).expect("kmers tensor conversion failed");
 
     batch
         .iter()
@@ -165,9 +165,9 @@ pub fn run_batch_bilstm(
         (probs, pred, kmers_cpu)
     });
 
-    let probs_data: Vec<f32> = Vec::from(probs.flatten(0, -1));
-    let pred_data:  Vec<i64> = Vec::from(pred.flatten(0, -1));
-    let kmers_data: Vec<i64> = Vec::from(kmers_cpu.flatten(0, -1));
+    let probs_data: Vec<f32> = Vec::try_from(probs.flatten(0, -1)).expect("probs tensor conversion failed");
+    let pred_data:  Vec<i64> = Vec::try_from(pred.flatten(0, -1)).expect("pred tensor conversion failed");
+    let kmers_data: Vec<i64> = Vec::try_from(kmers_cpu.flatten(0, -1)).expect("kmers tensor conversion failed");
 
     batch
         .iter()

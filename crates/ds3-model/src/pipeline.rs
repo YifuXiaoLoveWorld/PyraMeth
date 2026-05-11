@@ -23,7 +23,7 @@ use std::{
     fs::File,
     io::{BufWriter, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::Arc,
     thread,
 };
 
@@ -230,10 +230,6 @@ fn gpu_worker(
     rx: Receiver<Option<Batch>>,
     result_tx: Sender<Option<Vec<ResultLine>>>,
 ) {
-    if let Device::Cuda(idx) = device {
-        tch::Cuda::set_device(idx as i64);
-    }
-
     log::info!("[Worker-{rank}({device:?})] loading model …");
     let model = tch::CModule::load_on_device(model_path, device)
         .unwrap_or_else(|e| panic!("[Worker-{rank}] failed to load model: {e}"));
@@ -279,7 +275,7 @@ fn gpu_worker(
             // We don't know nproc_io here; the channel will be disconnected
             // when all producers have finished and all Nones are consumed.
             // Use the channel disconnection as the termination signal.
-            if rx.is_disconnected() || rx.is_empty() {
+            if rx.is_empty() {
                 break;
             }
             continue;
@@ -378,8 +374,8 @@ fn signal_producers(
 
             // Load all signals in this shard
             let signal_map: std::collections::HashMap<String, Vec<f32>> = match ft.as_str() {
-                "pod5"  => index_pod5(files[0])?,   // single file per call for simplicity
-                "slow5" => index_slow5(files[0])?,
+                "pod5"  => index_pod5(files[0].clone())?,
+                "slow5" => index_slow5(files[0].clone())?,
                 _       => anyhow::bail!("unknown file type"),
             };
 

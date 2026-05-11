@@ -25,7 +25,7 @@
 //! Export via `scripts/export_torchscript.py --model_class aggr`.
 
 use anyhow::Context;
-use tch::{Device, IValue, Kind, Tensor, no_grad};
+use tch::{Device, Kind, Tensor, no_grad};
 
 // ─── public API ──────────────────────────────────────────────────────────────
 
@@ -115,16 +115,11 @@ pub fn run_aggr_model(
             .to_device(device)
             .to_kind(Kind::Float);
 
-        let output = no_grad(|| {
+        let prob_tensor: Tensor = no_grad(|| {
             model
-                .forward_ts(&[IValue::Tensor(offsets_t), IValue::Tensor(histos_t)])
+                .forward_ts(&[offsets_t, histos_t])
                 .context("AggrAttRNN forward pass failed")
         })?;
-
-        let prob_tensor = match output {
-            IValue::Tensor(t) => t,
-            other => anyhow::bail!("AggrAttRNN returned unexpected IValue: {:?}", other),
-        };
 
         let probs: Vec<f32> = Vec::try_from(
             prob_tensor
