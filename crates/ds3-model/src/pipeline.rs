@@ -116,10 +116,65 @@ enum Batch {
     BiLstm(Vec<BiLstmFeature>),
 }
 
+// ─── CUDA backend preload ────────────────────────────────────────────────────
+
+/// dlopen libtorch_cuda.so so its static initialisers register the CUDA backend.
+///
+/// The linker's --as-needed drops the library from the NEEDED list because no
+/// Rust symbol directly references it.  Calling dlopen() here mirrors what
+/// Python does when `import torch.cuda` is executed.
+///
+/// libcuda.so (the driver API) is found by libcudart.so via NVIDIA's kernel
+/// module paths at runtime — it does not need to be in ldconfig or LD_LIBRARY_PATH.
+#[cfg(target_os = "linux")]
+fn preload_torch_cuda() {
+    extern "C" {
+        fn dlopen(
+            filename: *const std::os::raw::c_char,
+            flag: std::os::raw::c_int,
+        ) -> *mut std::os::raw::c_void;
+        fn dlerror() -> *const std::os::raw::c_char;
+    }
+
+    let libtorch = match std::env::var("LIBTORCH") {
+        Ok(p) => p,
+        Err(_) => {
+            log::debug!("LIBTORCH not set — skipping libtorch_cuda.so preload");
+            return;
+        }
+    };
+
+    let path = format!("{libtorch}/lib/libtorch_cuda.so\0");
+    let handle = unsafe {
+        dlopen(
+            path.as_ptr() as *const std::os::raw::c_char,
+            2 | 0x100, // RTLD_NOW | RTLD_GLOBAL
+        )
+    };
+
+    if handle.is_null() {
+        let msg = unsafe {
+            let p = dlerror();
+            if p.is_null() { "unknown error".to_string() }
+            else { std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned() }
+        };
+        log::warn!("dlopen libtorch_cuda.so failed: {msg} — will run on CPU");
+    } else {
+        log::debug!("libtorch_cuda.so preloaded via dlopen");
+    }
+}
+
 // ─── entry point ─────────────────────────────────────────────────────────────
 
 /// Run the full inference pipeline (equivalent to Python `inference_ultra`).
 pub fn run_inference(cfg: &InferenceConfig) -> anyhow::Result<()> {
+    // On Linux the linker's --as-needed drops libtorch_cuda.so because no Rust
+    // symbol directly references it.  Its static initialisers register PyTorch's
+    // CUDA dispatch backend; without them tch::Cuda::device_count() returns 0.
+    // Preload it via dlopen(), exactly as Python's `import torch.cuda` does.
+    #[cfg(target_os = "linux")]
+    preload_torch_cuda();
+
     // ── device selection ──────────────────────────────────────────────────
     let cuda_count = tch::Cuda::device_count();
     log::info!("CUDA devices visible to tch: {cuda_count}  (use_cpu={})", cfg.use_cpu);
