@@ -6,7 +6,7 @@
 use std::{
     collections::HashMap,
     fs::File,
-    io::{BufReader, Seek},
+    io::BufReader,
     path::Path,
 };
 
@@ -134,7 +134,7 @@ impl ReadIndexedBam {
 
         loop {
             // Capture virtual position BEFORE reading the record
-            let vpos = reader.virtual_position();
+            let vpos = reader.get_ref().virtual_position();
             match reader.read_record(&mut record) {
                 Ok(0) => break, // EOF
                 Ok(_) => {}
@@ -148,7 +148,7 @@ impl ReadIndexedBam {
             }
 
             // Determine index key: use `pi` tag (parent ID) if present, else query name
-            let read_id = get_parent_id(&record, &reader)?;
+            let read_id = get_parent_id(&record)?;
             index.entry(read_id).or_default().push(vpos);
             num_records += 1;
         }
@@ -184,7 +184,7 @@ impl ReadIndexedBam {
         let mut out = Vec::with_capacity(positions.len());
 
         for &vpos in positions {
-            reader.seek(vpos).map_err(|e| Ds3Error::Bam(e))?;
+            reader.get_mut().seek(vpos).map_err(|e| Ds3Error::Bam(e))?;
             let mut raw = bam::Record::default();
             reader.read_record(&mut raw).map_err(|e| Ds3Error::Bam(e))?;
             let aln = decode_record(&raw, ref_seqs, read_id)?;
@@ -205,7 +205,6 @@ impl ReadIndexedBam {
 /// Uses the `pi` (parent ID) tag when present, otherwise the query name.
 fn get_parent_id(
     record: &bam::Record,
-    _reader: &bam::io::Reader<BufReader<File>>,
 ) -> Result<String> {
     // Try pi tag first
     if let Some(Ok(field)) = record.data().get(TAG_PI) {
