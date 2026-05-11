@@ -80,30 +80,30 @@ The binary appears at `target/release/ds3` (Linux/macOS) or
 
 ## Step 3 — Usage
 
-### call_mods (methylation inference)
+### call-mods (methylation inference)
 ```bash
-ds3 call_mods \
-    --input_path /data/pod5/ \
+./target/release/ds3 call-mods \
+    --input-path /data/pod5/ \
     --bam        /data/aligned.bam \
-    --model_path ../model/human_r1041_5khz_CG_epoch5.pt \
-    --model_class mtm \
-    --result_file /data/mods.tsv \
-    --seq_len 21 --signal_len 15 \
-    --batch_size 512 --nproc 8
+    --model-path ../model/human_r1041_5khz_CG_epoch5.pt \
+    --model-class mtm \
+    --result-file /data/mods.tsv \
+    --seq-len 21 --signal-len 15 \
+    --batch-size 512 --nproc 8
 ```
 
-### call_freq (genome-level frequency)
+### call-freq (genome-level frequency)
 ```bash
 # Count-based TSV
-ds3 call_freq \
-    --input_path /data/mods.tsv \
-    --result_file /data/freq.tsv \
-    --prob_cf 0.5 --sort
+./target/release/ds3 call-freq \
+    --input-path /data/mods.tsv \
+    --result-file /data/freq.tsv \
+    --prob-cf 0.5 --sort
 
 # Count-based bedMethyl
-ds3 call_freq \
-    --input_path /data/mods.tsv \
-    --result_file /data/freq.bed \
+./target/release/ds3 call-freq \
+    --input-path /data/mods.tsv \
+    --result-file /data/freq.bed \
     --bed --sort
 
 # AggrAttRNN neural-network refinement (always writes bedMethyl)
@@ -114,20 +114,20 @@ python scripts/export_torchscript.py \
     --model_class aggr
 
 # Step 2: run refined frequency calling
-ds3 call_freq \
-    --input_path  /data/mods.tsv \
-    --result_file /data/freq_aggr.bed \
-    --aggre_model ../model/aggr_model.pt \
-    --cov_cf 4 --bin_size 20 --sort
+./target/release/ds3 call-freq \
+    --input-path  /data/mods.tsv \
+    --result-file /data/freq_aggr.bed \
+    --aggre-model ../model/aggr_model.pt \
+    --cov-cf 4 --bin-size 20 --sort
 ```
 
 ### extract (feature extraction to TSV)
 ```bash
-ds3 extract \
-    --input_dir /data/pod5/ \
+./target/release/ds3 extract \
+    --input-dir /data/pod5/ \
     --bam       /data/aligned.bam \
-    --write_path /data/features.tsv \
-    --motifs CG --seq_len 21 --signal_len 15 \
+    --write-path /data/features.tsv \
+    --motifs CG --seq-len 21 --signal-len 15 \
     --nproc 16
 ```
 

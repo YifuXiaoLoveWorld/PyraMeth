@@ -121,11 +121,17 @@ enum Batch {
 /// Run the full inference pipeline (equivalent to Python `inference_ultra`).
 pub fn run_inference(cfg: &InferenceConfig) -> anyhow::Result<()> {
     // ── device selection ──────────────────────────────────────────────────
-    let devices: Vec<Device> = if cfg.use_cpu || tch::Cuda::device_count() == 0 {
-        log::info!("Running on CPU.");
+    let cuda_count = tch::Cuda::device_count();
+    log::info!("CUDA devices visible to tch: {cuda_count}  (use_cpu={})", cfg.use_cpu);
+    let devices: Vec<Device> = if cfg.use_cpu || cuda_count == 0 {
+        log::warn!(
+            "Running on CPU — {}",
+            if cfg.use_cpu { "--use-cpu flag set" }
+            else { "no CUDA device found; check LIBTORCH is a CUDA build and LD_LIBRARY_PATH includes $LIBTORCH/lib" }
+        );
         vec![Device::Cpu]
     } else {
-        let n = tch::Cuda::device_count() as usize;
+        let n = cuda_count as usize;
         log::info!("Using {n} GPU(s).");
         (0..n).map(Device::Cuda).collect()
     };
@@ -372,45 +378,45 @@ fn signal_producers(
             // Round-robin GPU assignment for this shard
             let tx = &batch_txs[shard_id % n_workers];
 
-            // Load all signals in this shard
-            let signal_map: std::collections::HashMap<String, Vec<f32>> = match ft.as_str() {
-                "pod5"  => index_pod5(files[0].clone())?,
-                "slow5" => index_slow5(files[0].clone())?,
-                _       => anyhow::bail!("unknown file type"),
-            };
-
-            // For each read in signal map, look up BAM and extract features
             let mut mtm_batch    = Vec::with_capacity(batch_size);
             let mut bilstm_batch = Vec::with_capacity(batch_size);
 
-            for (read_id, signal) in &signal_map {
-                let alignments = match bam.get_alignments(read_id) {
-                    Ok(a) => a,
-                    Err(_) => continue,
+            for file in files {
+                let signal_map: std::collections::HashMap<String, Vec<f32>> = match ft.as_str() {
+                    "pod5"  => index_pod5(file.clone())?,
+                    "slow5" => index_slow5(file.clone())?,
+                    _       => anyhow::bail!("unknown file type"),
                 };
-                for aln in &alignments {
-                    match model_class {
-                        ModelClass::Mtm => {
-                            if let Ok(feats) = ds3_core::features::process_data_mtm(
-                                signal, aln, &args,
-                            ) {
-                                mtm_batch.extend(feats);
-                                if mtm_batch.len() >= batch_size {
-                                    let _ = tx.send(Some(Batch::Mtm(
-                                        std::mem::replace(&mut mtm_batch, Vec::with_capacity(batch_size)),
-                                    )));
+
+                for (read_id, signal) in &signal_map {
+                    let alignments = match bam.get_alignments(read_id) {
+                        Ok(a) => a,
+                        Err(_) => continue,
+                    };
+                    for aln in &alignments {
+                        match model_class {
+                            ModelClass::Mtm => {
+                                if let Ok(feats) = ds3_core::features::process_data_mtm(
+                                    signal, aln, &args,
+                                ) {
+                                    mtm_batch.extend(feats);
+                                    if mtm_batch.len() >= batch_size {
+                                        let _ = tx.send(Some(Batch::Mtm(
+                                            std::mem::replace(&mut mtm_batch, Vec::with_capacity(batch_size)),
+                                        )));
+                                    }
                                 }
                             }
-                        }
-                        ModelClass::BiLstm => {
-                            if let Ok(feats) = ds3_core::features::process_data_bilstm(
-                                signal, aln, &args,
-                            ) {
-                                bilstm_batch.extend(feats);
-                                if bilstm_batch.len() >= batch_size {
-                                    let _ = tx.send(Some(Batch::BiLstm(
-                                        std::mem::replace(&mut bilstm_batch, Vec::with_capacity(batch_size)),
-                                    )));
+                            ModelClass::BiLstm => {
+                                if let Ok(feats) = ds3_core::features::process_data_bilstm(
+                                    signal, aln, &args,
+                                ) {
+                                    bilstm_batch.extend(feats);
+                                    if bilstm_batch.len() >= batch_size {
+                                        let _ = tx.send(Some(Batch::BiLstm(
+                                            std::mem::replace(&mut bilstm_batch, Vec::with_capacity(batch_size)),
+                                        )));
+                                    }
                                 }
                             }
                         }
