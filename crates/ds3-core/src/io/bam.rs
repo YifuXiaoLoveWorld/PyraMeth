@@ -207,15 +207,15 @@ fn get_parent_id(
     record: &bam::Record,
 ) -> Result<String> {
     // Try pi tag first
-    if let Some(Ok(field)) = record.data().get(TAG_PI) {
+    if let Some(Ok(field)) = record.data().get(&TAG_PI) {
         if let noodles::sam::alignment::record::data::field::Value::String(s) = field {
-            return Ok(s.to_string_lossy().into_owned());
+            return Ok(s.to_str_lossy().into_owned());
         }
     }
     // Fall back to query name
     Ok(record
         .name()
-        .map(|n| std::str::from_utf8(n.as_bytes()).unwrap_or("").to_string())
+        .map(|n| std::str::from_utf8(n.as_ref()).unwrap_or("").to_string())
         .unwrap_or_default())
 }
 
@@ -230,6 +230,7 @@ fn decode_record(
     // ── reference name ────────────────────────────────────────────────────
     let ref_name = record
         .reference_sequence_id()
+        .and_then(|r| r.ok())
         .and_then(|id| ref_seqs.get_index(id))
         .map(|(name, _)| name.to_string())
         .unwrap_or_default();
@@ -243,6 +244,7 @@ fn decode_record(
     // ── reference start / end ─────────────────────────────────────────────
     let ref_start = record
         .alignment_start()
+        .and_then(|r| r.ok())
         .map(|p| p.get() as i64 - 1) // noodles is 1-based
         .unwrap_or(-1);
 
@@ -347,15 +349,29 @@ fn decode_mv_tag(
     use noodles::sam::alignment::record::data::field::Value;
 
     let field = data
-        .get(TAG_MV)
+        .get(&TAG_MV)
         .ok_or_else(|| Ds3Error::MissingTag { read_id: read_id.to_string(), tag: "mv" })?
         .map_err(|e| Ds3Error::Noodles(e.to_string()))?;
 
     let values: Vec<i32> = match field {
-        Value::Array(arr) => arr
-            .iter()
-            .map(|v| v.map(|x| x as i32).map_err(|e| Ds3Error::Noodles(e.to_string())))
-            .collect::<Result<Vec<_>>>()?,
+        Value::Array(arr) => {
+            use noodles::sam::alignment::record::data::field::value::Array as Arr;
+            macro_rules! to_i32 {
+                ($it:expr) => {
+                    $it.map(|r| r.map(|x| x as i32).map_err(|e| Ds3Error::Noodles(e.to_string())))
+                        .collect::<Result<Vec<_>>>()?
+                };
+            }
+            match arr {
+                Arr::Int8(it)   => to_i32!(it),
+                Arr::UInt8(it)  => to_i32!(it),
+                Arr::Int16(it)  => to_i32!(it),
+                Arr::UInt16(it) => to_i32!(it),
+                Arr::Int32(it)  => to_i32!(it),
+                Arr::UInt32(it) => to_i32!(it),
+                _ => return Err(Ds3Error::MissingTag { read_id: read_id.to_string(), tag: "mv" }),
+            }
+        }
         _ => {
             return Err(Ds3Error::MissingTag { read_id: read_id.to_string(), tag: "mv" });
         }
@@ -383,7 +399,7 @@ fn get_tag_i64(
     use noodles::sam::alignment::record::data::field::Value;
 
     let field = data
-        .get(tag)
+        .get(&tag)
         .ok_or_else(|| Ds3Error::MissingTag { read_id: read_id.to_string(), tag: tag_name })?
         .map_err(|e| Ds3Error::Noodles(e.to_string()))?;
 
@@ -404,7 +420,7 @@ fn get_tag_i64_opt(
     tag: Tag,
 ) -> Option<i64> {
     use noodles::sam::alignment::record::data::field::Value;
-    let field = data.get(tag)?.ok()?;
+    let field = data.get(&tag)?.ok()?;
     match field {
         Value::Int8(v)  => Some(v as i64),
         Value::UInt8(v) => Some(v as i64),
