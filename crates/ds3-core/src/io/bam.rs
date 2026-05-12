@@ -13,7 +13,7 @@ use std::{
 
 use noodles::{
     bam,
-    bgzf::VirtualPosition,
+    bgzf::{self, VirtualPosition},
     sam,
     sam::alignment::record::data::field::Tag,
 };
@@ -191,7 +191,7 @@ impl ReadIndexedBam {
 /// `BamSearcher` reduces that to one open + one header skip per unit.
 pub struct BamSearcher {
     index:  Arc<ReadIndexedBam>,
-    reader: bam::io::Reader<BufReader<File>>,
+    reader: bam::io::Reader<bgzf::Reader<BufReader<File>>>,
 }
 
 impl BamSearcher {
