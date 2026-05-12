@@ -198,9 +198,11 @@ pub fn run_inference(cfg: &InferenceConfig) -> anyhow::Result<()> {
     let n_workers = devices.len();
 
     // ── channels ──────────────────────────────────────────────────────────
-    // One bounded channel per GPU (back-pressure = 256 batches)
-    let (batch_txs, batch_rxs): (Vec<_>, Vec<_>) =
-        (0..n_workers).map(|_| bounded::<Option<Batch>>(256)).unzip();
+    // Single shared batch channel — all GPUs consume from one queue.
+    // This gives perfect dynamic load-balancing: a GPU that finishes its
+    // current batch immediately picks up the next one, regardless of which
+    // producer thread generated it.  Back-pressure = 256 batches × n GPUs.
+    let (batch_tx, batch_rx) = bounded::<Batch>(256 * n_workers);
 
     // Single result channel
     let (result_tx, result_rx) = bounded::<Option<Vec<ResultLine>>>(1024);
@@ -228,11 +230,13 @@ pub fn run_inference(cfg: &InferenceConfig) -> anyhow::Result<()> {
     });
 
     // ── spawn GPU inference threads ───────────────────────────────────────
+    // Every GPU clones the same Receiver — crossbeam MPMC ensures each Batch
+    // is delivered to exactly one GPU (the first free one).
     let gpu_handles: Vec<_> = devices
         .into_iter()
-        .zip(batch_rxs.into_iter())
         .enumerate()
-        .map(|(rank, (device, rx))| {
+        .map(|(rank, device)| {
+            let rx = batch_rx.clone();
             let model_path = cfg.model_path.clone();
             let model_class = cfg.model_class;
             let batch_size = cfg.batch_size;
@@ -256,21 +260,18 @@ pub fn run_inference(cfg: &InferenceConfig) -> anyhow::Result<()> {
     let file_type = detect_file_type(cfg)?;
     match file_type.as_str() {
         "tsv" => {
-            tsv_producer(&cfg.input_path, cfg.model_class, &batch_txs, cfg.batch_size)?;
+            tsv_producer(&cfg.input_path, cfg.model_class, &batch_tx, cfg.batch_size)?;
         }
         "pod5" | "slow5" => {
-            signal_producers(cfg, &file_type, &ext_args, &batch_txs)?;
+            signal_producers(cfg, &file_type, &ext_args, &batch_tx)?;
         }
         other => anyhow::bail!("unsupported file_type '{other}'"),
     }
 
-    // ── send termination signals ──────────────────────────────────────────
-    for tx in &batch_txs {
-        // Send one None per IO worker to each GPU (mirrors Python end-count logic)
-        for _ in 0..cfg.nproc_io {
-            let _ = tx.send(None);
-        }
-    }
+    // ── termination ───────────────────────────────────────────────────────
+    // Dropping batch_tx (the last Sender clone held outside producers) closes
+    // the channel.  GPU workers see Err from recv() and exit their loop.
+    drop(batch_tx);
 
     for h in gpu_handles {
         h.join().expect("GPU thread panicked");
@@ -293,7 +294,7 @@ fn gpu_worker(
     model_class: ModelClass,
     batch_size: usize,
     n_embed: i64,
-    rx: Receiver<Option<Batch>>,
+    rx: Receiver<Batch>,
     result_tx: Sender<Option<Vec<ResultLine>>>,
 ) {
     log::info!("[Worker-{rank}({device:?})] loading model …");
@@ -305,7 +306,6 @@ fn gpu_worker(
     // ── batch buffers ─────────────────────────────────────────────────────
     let mut mtm_buf:    Vec<MtmFeature>    = Vec::with_capacity(batch_size);
     let mut bilstm_buf: Vec<BiLstmFeature> = Vec::with_capacity(batch_size);
-    let mut _end_count = 0usize;
 
     let flush_mtm = |buf: &mut Vec<MtmFeature>| -> Vec<ResultLine> {
         if buf.is_empty() { return Vec::new(); }
@@ -321,33 +321,9 @@ fn gpu_worker(
         lines
     };
 
-    loop {
-        let item = rx.recv().unwrap_or(None);
-
-        if item.is_none() {
-            _end_count += 1;
-            // Python sends one None per IO producer per GPU queue
-            // We mirror the same count: break when all producers have sent None
-            // (The pipeline sends cfg.nproc_io Nones per GPU channel)
-            // Here we just count and flush when all signals received.
-            // The channel is bounded so we process remaining items first.
-            let lines = match model_class {
-                ModelClass::Mtm    => flush_mtm(&mut mtm_buf),
-                ModelClass::BiLstm => flush_bilstm(&mut bilstm_buf),
-            };
-            if !lines.is_empty() {
-                let _ = result_tx.send(Some(lines));
-            }
-            // We don't know nproc_io here; the channel will be disconnected
-            // when all producers have finished and all Nones are consumed.
-            // Use the channel disconnection as the termination signal.
-            if rx.is_empty() {
-                break;
-            }
-            continue;
-        }
-
-        match item.unwrap() {
+    // Process batches until the channel is closed (all producers dropped their Sender).
+    while let Ok(batch) = rx.recv() {
+        match batch {
             Batch::Mtm(feats) => {
                 for f in feats {
                     mtm_buf.push(f);
@@ -371,6 +347,15 @@ fn gpu_worker(
                 }
             }
         }
+    }
+
+    // Flush any partial batch remaining after channel closed.
+    let lines = match model_class {
+        ModelClass::Mtm    => flush_mtm(&mut mtm_buf),
+        ModelClass::BiLstm => flush_bilstm(&mut bilstm_buf),
+    };
+    if !lines.is_empty() {
+        let _ = result_tx.send(Some(lines));
     }
 
     log::info!("[Worker-{rank}({device:?})] done.");
@@ -404,7 +389,7 @@ fn signal_producers(
     cfg: &InferenceConfig,
     file_type: &str,
     ext_args: &Arc<ExtractionArgs>,
-    batch_txs: &[Sender<Option<Batch>>],
+    batch_tx: &Sender<Batch>,
 ) -> anyhow::Result<()> {
     let bam_path = cfg
         .bam_path
@@ -419,7 +404,6 @@ fn signal_producers(
     let signal_files = collect_signal_files(&cfg.input_path, file_type)?;
     log::info!("Found {} {} files.", signal_files.len(), file_type);
 
-    let n_workers = batch_txs.len();
     let batch_size = cfg.batch_size;
     let model_class = cfg.model_class;
 
@@ -436,7 +420,7 @@ fn signal_producers(
             (signal_files.len() / cfg.nproc_io.max(1)).max(1),
         )
         .enumerate()
-        .try_for_each(|(shard_id, files)| -> anyhow::Result<()> {
+        .try_for_each(|(_shard_id, files)| -> anyhow::Result<()> {
             let bam  = bam_index.clone();
             let args = ext_args.clone();
             let ft   = file_type.to_string();
@@ -445,9 +429,6 @@ fn signal_producers(
             let cnt_bam_err = n_reads_bam_err.clone();
             let cnt_feat    = n_feat_extracted.clone();
             let cnt_feat_err = n_feat_err.clone();
-
-            // Round-robin GPU assignment for this shard
-            let tx = &batch_txs[shard_id % n_workers];
 
             // One BAM file handle per shard — seeks within it instead of
             // opening a new file + re-parsing the header for every read.
@@ -503,9 +484,9 @@ fn signal_producers(
                                         cnt_feat.fetch_add(feats.len(), Ordering::Relaxed);
                                         mtm_batch.extend(feats);
                                         if mtm_batch.len() >= batch_size {
-                                            let _ = tx.send(Some(Batch::Mtm(
+                                            let _ = batch_tx.send(Batch::Mtm(
                                                 std::mem::replace(&mut mtm_batch, Vec::with_capacity(batch_size)),
-                                            )));
+                                            ));
                                         }
                                     }
                                     Err(e) => {
@@ -522,9 +503,9 @@ fn signal_producers(
                                         cnt_feat.fetch_add(feats.len(), Ordering::Relaxed);
                                         bilstm_batch.extend(feats);
                                         if bilstm_batch.len() >= batch_size {
-                                            let _ = tx.send(Some(Batch::BiLstm(
+                                            let _ = batch_tx.send(Batch::BiLstm(
                                                 std::mem::replace(&mut bilstm_batch, Vec::with_capacity(batch_size)),
-                                            )));
+                                            ));
                                         }
                                     }
                                     Err(e) => {
@@ -542,10 +523,10 @@ fn signal_producers(
 
             // Flush remaining
             if !mtm_batch.is_empty() {
-                let _ = tx.send(Some(Batch::Mtm(mtm_batch)));
+                let _ = batch_tx.send(Batch::Mtm(mtm_batch));
             }
             if !bilstm_batch.is_empty() {
-                let _ = tx.send(Some(Batch::BiLstm(bilstm_batch)));
+                let _ = batch_tx.send(Batch::BiLstm(bilstm_batch));
             }
 
             Ok(())
@@ -585,13 +566,12 @@ fn signal_producers(
 fn tsv_producer(
     tsv_path: &Path,
     model_class: ModelClass,
-    batch_txs: &[Sender<Option<Batch>>],
+    batch_tx: &Sender<Batch>,
     batch_size: usize,
 ) -> anyhow::Result<()> {
     use ds3_core::kmer::base_to_code;
     use std::io::{BufRead, BufReader};
 
-    let n_workers = batch_txs.len();
     let file: Box<dyn std::io::Read> = if tsv_path.extension().map_or(false, |e| e == "gz") {
         // gzip support via flate2 — add to Cargo.toml if needed
         // For now just open as plain
@@ -603,7 +583,6 @@ fn tsv_producer(
     let reader = BufReader::new(file);
     let mut mtm_buf:    Vec<MtmFeature>    = Vec::with_capacity(batch_size);
     let mut bilstm_buf: Vec<BiLstmFeature> = Vec::with_capacity(batch_size);
-    let mut rng_state: usize = 0;
 
     for line in reader.lines() {
         let line = line?;
@@ -625,10 +604,6 @@ fn tsv_producer(
 
         let label: u8 = words[11].trim().parse().unwrap_or(0);
 
-        // Round-robin worker assignment
-        rng_state = rng_state.wrapping_add(1);
-        let qid = rng_state % n_workers;
-
         match model_class {
             ModelClass::Mtm => {
                 mtm_buf.push(MtmFeature {
@@ -636,12 +611,12 @@ fn tsv_producer(
                     k_seq,
                     k_signals,
                     label,
-                    tag: 1, // no proximity info in TSV → default 1
+                    tag: 1,
                 });
                 if mtm_buf.len() >= batch_size {
-                    batch_txs[qid].send(Some(Batch::Mtm(
+                    batch_tx.send(Batch::Mtm(
                         std::mem::replace(&mut mtm_buf, Vec::with_capacity(batch_size)),
-                    )))?;
+                    ))?;
                 }
             }
             ModelClass::BiLstm => {
@@ -652,21 +627,20 @@ fn tsv_producer(
                     sample_info, k_seq, means, stds, lens, k_signals, label,
                 });
                 if bilstm_buf.len() >= batch_size {
-                    batch_txs[qid].send(Some(Batch::BiLstm(
+                    batch_tx.send(Batch::BiLstm(
                         std::mem::replace(&mut bilstm_buf, Vec::with_capacity(batch_size)),
-                    )))?;
+                    ))?;
                 }
             }
         }
     }
 
     // Flush
-    let qid = rng_state % n_workers;
     if !mtm_buf.is_empty() {
-        batch_txs[qid].send(Some(Batch::Mtm(mtm_buf)))?;
+        batch_tx.send(Batch::Mtm(mtm_buf))?;
     }
     if !bilstm_buf.is_empty() {
-        batch_txs[qid].send(Some(Batch::BiLstm(bilstm_buf)))?;
+        batch_tx.send(Batch::BiLstm(bilstm_buf))?;
     }
 
     log::info!("[TSV-Producer] done.");
