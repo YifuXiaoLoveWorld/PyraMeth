@@ -35,11 +35,13 @@ use rayon::prelude::*;
 use tch::Device;
 
 use ds3_core::{
+    error::Result as Ds3Result,
     features::{BiLstmFeature, ExtractionArgs, MtmFeature},
     io::{
         bam::{BamSearcher, ReadIndexedBam},
-        pod5::index_pod5,
-        slow5::index_slow5,
+        pod5::iter_pod5,
+        slow5::read_slow5,
+        RawRead,
     },
     kmer::get_motif_seqs,
     signal::NormalizeMethod,
@@ -455,13 +457,26 @@ fn signal_producers(
             let mut bilstm_batch = Vec::with_capacity(batch_size);
 
             for file in files {
-                let signal_map: std::collections::HashMap<String, Vec<f32>> = match ft.as_str() {
-                    "pod5"  => index_pod5(file.clone())?,
-                    "slow5" => index_slow5(file.clone())?,
+                let reads: Box<dyn Iterator<Item = Ds3Result<RawRead>>> = match ft.as_str() {
+                    "pod5"  => iter_pod5(file.clone())?,
+                    "slow5" => Box::new(
+                        read_slow5(file.clone())?
+                            .into_iter()
+                            .map(|r| -> Ds3Result<RawRead> { Ok(r) }),
+                    ),
                     _       => anyhow::bail!("unknown file type"),
                 };
 
-                for (read_id, signal) in &signal_map {
+                for raw_read_result in reads {
+                    let raw_read = match raw_read_result {
+                        Ok(r)  => r,
+                        Err(e) => {
+                            log::warn!("signal read error: {e}");
+                            continue;
+                        }
+                    };
+                    let read_id = &raw_read.read_id;
+                    let signal  = &raw_read.signal;
                     cnt_total.fetch_add(1, Ordering::Relaxed);
 
                     let alignments = match searcher.get_alignments(read_id) {
