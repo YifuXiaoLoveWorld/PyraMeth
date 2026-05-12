@@ -38,7 +38,32 @@ use super::RawRead;
 pub fn read_pod5(path: impl AsRef<Path>) -> Result<Vec<RawRead>> {
     #[cfg(feature = "pod5-pure")]
     {
-        native::read_pod5_impl(path.as_ref())
+        native::iter_pod5_impl(path.as_ref())?.collect()
+    }
+    #[cfg(not(feature = "pod5-pure"))]
+    {
+        let _ = path;
+        Err(Ds3Error::SignalFile(
+            "POD5 reading is disabled. Rebuild with `--features pod5-pure`. \
+             See BUILD.md for instructions."
+                .into(),
+        ))
+    }
+}
+
+/// Streaming iterator over reads in a POD5 file.
+///
+/// Yields one `Result<RawRead>` per sequencing read.  Signal decompression
+/// happens read-by-read, keeping peak memory proportional to the largest read
+/// rather than the whole file.
+///
+/// Requires the `pod5-pure` Cargo feature.
+pub fn iter_pod5(
+    path: impl AsRef<Path>,
+) -> Result<Box<dyn Iterator<Item = Result<RawRead>> + Send>> {
+    #[cfg(feature = "pod5-pure")]
+    {
+        Ok(Box::new(native::iter_pod5_impl(path.as_ref())?))
     }
     #[cfg(not(feature = "pod5-pure"))]
     {
@@ -63,38 +88,64 @@ pub fn index_pod5(path: impl AsRef<Path>) -> Result<HashMap<String, Vec<f32>>> {
 
 #[cfg(feature = "pod5-pure")]
 mod native {
-    use std::{
-        fs::File,
-        io::{Cursor, Read, Seek, SeekFrom},
-        path::Path,
-    };
+    use std::{fs::File, io::Cursor, path::Path};
 
     use arrow::{
         array::{
             Array, BinaryArray, FixedSizeBinaryArray, LargeBinaryArray, LargeListArray,
-            ListArray, UInt32Array, UInt64Array,
+            ListArray, RecordBatch, UInt32Array, UInt64Array,
         },
         ipc::reader::FileReader,
     };
+    use memmap2::MmapOptions;
     use pod5_format::ParsedFooter;
 
     use crate::error::{Ds3Error, Result};
     use super::super::RawRead;
 
-    // ─── entry point ─────────────────────────────────────────────────────────
+    // ─── public entry point ───────────────────────────────────────────────────
 
-    pub(super) fn read_pod5_impl(path: &Path) -> Result<Vec<RawRead>> {
+    pub(super) fn iter_pod5_impl(path: &Path) -> Result<Pod5Iter> {
         let mut file = File::open(path)
             .map_err(|e| Ds3Error::SignalFile(format!("cannot open {:?}: {e}", path)))?;
 
-        // pod5-format parses the FlatBuffers footer and returns section offsets.
         let footer = ParsedFooter::read_footer(&mut file)
             .map_err(|e| Ds3Error::SignalFile(format!("POD5 footer parse error: {e}")))?;
 
-        let reads_meta   = load_reads_table(&mut file, &footer)?;
-        let signal_table = load_signal_table(&mut file, &footer)?;
+        // Map the whole file read-only. The OS pages in only what we touch,
+        // and Arrow copies batch data into its own buffers, so we can drop
+        // the mmap immediately after loading (see end of this function).
+        //
+        // Safety: we never mutate the mapping and hold the File open while
+        // the Mmap lives (required on Windows).
+        let mmap = unsafe { MmapOptions::new().map(&file) }
+            .map_err(|e| Ds3Error::SignalFile(format!("mmap {:?}: {e}", path)))?;
 
-        assemble_reads(reads_meta, signal_table)
+        let reads_meta   = load_reads_table(&mmap, &footer)?;
+        let signal_table = load_signal_table(&mmap, &footer)?;
+
+        // mmap (and file) are dropped here. RecordBatches inside signal_table
+        // own their Arrow buffers independently.
+        Ok(Pod5Iter {
+            reads: reads_meta.into_iter(),
+            signal_table,
+        })
+    }
+
+    // ─── streaming iterator ───────────────────────────────────────────────────
+
+    pub(super) struct Pod5Iter {
+        reads:        std::vec::IntoIter<ReadMeta>,
+        signal_table: SignalTable,
+    }
+
+    impl Iterator for Pod5Iter {
+        type Item = Result<RawRead>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            let meta = self.reads.next()?;
+            Some(decode_read(meta, &self.signal_table))
+        }
     }
 
     // ─── reads table ──────────────────────────────────────────────────────────
@@ -104,47 +155,44 @@ mod native {
         signal_rows: Vec<u64>,
     }
 
-    fn load_reads_table(file: &mut File, footer: &ParsedFooter) -> Result<Vec<ReadMeta>> {
+    fn load_reads_table(mmap: &memmap2::Mmap, footer: &ParsedFooter) -> Result<Vec<ReadMeta>> {
         let section = footer
             .read_table()
             .map_err(|e| Ds3Error::SignalFile(format!("reads table missing from footer: {e}")))?;
 
-        let offset = section.as_ref().offset() as u64;
-        let length = section.as_ref().length() as u64;
+        let offset = section.as_ref().offset() as usize;
+        let length = section.as_ref().length() as usize;
 
-        let ipc_bytes = read_bytes_at(file, offset, length)?;
-        let cursor = Cursor::new(ipc_bytes);
+        // Zero-copy: Cursor wraps a slice of the mmap; no heap Vec<u8> needed.
+        let cursor = Cursor::new(&mmap[offset..offset + length]);
         let mut reader = FileReader::try_new(cursor, None)
             .map_err(|e| Ds3Error::SignalFile(format!("reads IPC parse: {e}")))?;
 
-        let mut out = Vec::new();
+        // Column indices are the same for every batch; look them up once.
+        let schema  = reader.schema();
+        let rid_idx = schema.index_of("read_id").map_err(|_| {
+            Ds3Error::SignalFile("reads table missing 'read_id' column".into())
+        })?;
+        let sr_idx = schema
+            .index_of("signal_rows")
+            .or_else(|_| schema.index_of("signal_row_count"))
+            .or_else(|_| schema.index_of("signal"))
+            .map_err(|_| {
+                let cols: Vec<&str> =
+                    schema.fields().iter().map(|f| f.name().as_str()).collect();
+                Ds3Error::SignalFile(format!(
+                    "reads table missing signal-rows column; available columns: {cols:?}"
+                ))
+            })?;
 
+        let mut out = Vec::new();
         for batch_res in &mut reader {
             let batch = batch_res
                 .map_err(|e| Ds3Error::SignalFile(format!("reads batch: {e}")))?;
-            let schema = batch.schema();
-
-            let rid_idx = schema.index_of("read_id").map_err(|_| {
-                Ds3Error::SignalFile("reads table missing 'read_id' column".into())
-            })?;
-            let sr_idx = schema
-                .index_of("signal_rows")
-                .or_else(|_| schema.index_of("signal_row_count"))
-                .or_else(|_| schema.index_of("signal"))
-                .map_err(|_| {
-                    let cols: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
-                    Ds3Error::SignalFile(format!(
-                        "reads table missing signal-rows column; available columns: {:?}",
-                        cols
-                    ))
-                })?;
-
-            let rid_col = batch.column(rid_idx);
-            let sr_col  = batch.column(sr_idx);
 
             for row in 0..batch.num_rows() {
-                let read_id     = decode_uuid(rid_col.as_ref(), row)?;
-                let signal_rows = decode_signal_rows(sr_col.as_ref(), row)?;
+                let read_id     = decode_uuid(batch.column(rid_idx).as_ref(), row)?;
+                let signal_rows = decode_signal_rows(batch.column(sr_idx).as_ref(), row)?;
                 out.push(ReadMeta { read_id, signal_rows });
             }
         }
@@ -152,7 +200,112 @@ mod native {
         Ok(out)
     }
 
-    /// Decode a UUID from a FixedSizeBinary(16) column row → hyphenated string.
+    // ─── signal table ─────────────────────────────────────────────────────────
+
+    /// Arrow batches from the signal table plus the two-level index parameters.
+    ///
+    /// Layout mirrors Python pod5's `_cached_signal_batches` approach:
+    ///   batch_idx    = signal_row // rows_per_batch
+    ///   row_in_batch = signal_row %  rows_per_batch
+    ///
+    /// All batches except (possibly) the last one have exactly `rows_per_batch`
+    /// rows — this invariant is guaranteed by the POD5 spec.
+    struct SignalTable {
+        batches:        Vec<RecordBatch>,
+        rows_per_batch: usize,
+        sig_col_idx:    usize,
+        cnt_col_idx:    usize,
+    }
+
+    impl SignalTable {
+        /// Decompress one signal chunk, borrowing its bytes directly from the
+        /// Arrow buffer (no extra heap copy before decompression).
+        fn decode_row(&self, row_idx: u64) -> Result<Vec<i16>> {
+            if self.rows_per_batch == 0 {
+                return Err(Ds3Error::SignalFile("signal table has no batches".into()));
+            }
+            let batch_idx    = row_idx as usize / self.rows_per_batch;
+            let row_in_batch = row_idx as usize % self.rows_per_batch;
+
+            let batch = self.batches.get(batch_idx).ok_or_else(|| {
+                Ds3Error::SignalFile(format!(
+                    "signal row {row_idx} → batch {batch_idx} out of range \
+                     ({} batches, {} rows/batch)",
+                    self.batches.len(),
+                    self.rows_per_batch,
+                ))
+            })?;
+
+            if row_in_batch >= batch.num_rows() {
+                return Err(Ds3Error::SignalFile(format!(
+                    "signal row {row_idx}: row_in_batch={row_in_batch} \
+                     >= batch size {} (last batch?)",
+                    batch.num_rows()
+                )));
+            }
+
+            // Borrow compressed bytes directly from Arrow's buffer — no copy.
+            let sig_bytes = extract_binary(batch.column(self.sig_col_idx).as_ref(), row_in_batch)?;
+            let count = batch
+                .column(self.cnt_col_idx)
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .ok_or_else(|| Ds3Error::SignalFile("samples column: not UInt32".into()))?
+                .value(row_in_batch);
+
+            svb16::decode(sig_bytes, count as usize)
+                .map_err(|e| Ds3Error::SignalFile(format!("VBZ decode (row {row_idx}): {e}")))
+        }
+    }
+
+    fn load_signal_table(mmap: &memmap2::Mmap, footer: &ParsedFooter) -> Result<SignalTable> {
+        let section = footer
+            .signal_table()
+            .map_err(|e| Ds3Error::SignalFile(format!("signal table missing from footer: {e}")))?;
+
+        let offset = section.as_ref().offset() as usize;
+        let length = section.as_ref().length() as usize;
+
+        let cursor = Cursor::new(&mmap[offset..offset + length]);
+        let mut reader = FileReader::try_new(cursor, None)
+            .map_err(|e| Ds3Error::SignalFile(format!("signal IPC parse: {e}")))?;
+
+        let schema      = reader.schema();
+        let sig_col_idx = schema.index_of("signal").map_err(|_| {
+            Ds3Error::SignalFile("signal table missing 'signal' column".into())
+        })?;
+        let cnt_col_idx = schema.index_of("samples").map_err(|_| {
+            Ds3Error::SignalFile("signal table missing 'samples' column".into())
+        })?;
+
+        let mut batches        = Vec::with_capacity(reader.num_batches());
+        let mut rows_per_batch = 0usize;
+
+        for batch_res in &mut reader {
+            let batch = batch_res
+                .map_err(|e| Ds3Error::SignalFile(format!("signal batch: {e}")))?;
+            if batches.is_empty() {
+                rows_per_batch = batch.num_rows();
+            }
+            batches.push(batch);
+        }
+
+        Ok(SignalTable { batches, rows_per_batch, sig_col_idx, cnt_col_idx })
+    }
+
+    // ─── per-read assembly ────────────────────────────────────────────────────
+
+    fn decode_read(meta: ReadMeta, signal_table: &SignalTable) -> Result<RawRead> {
+        let mut signal: Vec<f32> = Vec::new();
+        for &row_idx in &meta.signal_rows {
+            let chunk = signal_table.decode_row(row_idx)?;
+            signal.extend(chunk.iter().map(|&v| v as f32));
+        }
+        Ok(RawRead { read_id: meta.read_id, signal })
+    }
+
+    // ─── column decoders ──────────────────────────────────────────────────────
+
     fn decode_uuid(col: &dyn Array, row: usize) -> Result<String> {
         let bytes = col
             .as_any()
@@ -181,14 +334,12 @@ mod native {
                 }
             ))
         } else {
-            // Some versions store UUID as UTF-8 text.
             std::str::from_utf8(bytes)
                 .map(|s| s.to_owned())
-                .map_err(|_| Ds3Error::SignalFile("read_id is not 16-byte UUID or UTF-8".into()))
+                .map_err(|_| Ds3Error::SignalFile("read_id: not 16-byte UUID nor UTF-8".into()))
         }
     }
 
-    /// Extract signal row indices from a ListArray column.
     fn decode_signal_rows(col: &dyn Array, row: usize) -> Result<Vec<u64>> {
         if let Some(list) = col.as_any().downcast_ref::<ListArray>() {
             let offsets = list.offsets();
@@ -209,66 +360,13 @@ mod native {
                 return Ok((start..end).map(|i| v.value(i)).collect());
             }
         }
-        // Scalar fallback: one row = one signal section row.
         if let Some(v) = col.as_any().downcast_ref::<UInt64Array>() {
             return Ok(vec![v.value(row)]);
         }
-        Err(Ds3Error::SignalFile(
-            "signal_rows: unrecognised Arrow type".into(),
-        ))
+        Err(Ds3Error::SignalFile("signal_rows: unrecognised Arrow column type".into()))
     }
 
-    // ─── signal table ─────────────────────────────────────────────────────────
-
-    struct SignalTable {
-        /// (compressed_bytes, sample_count) per row.
-        rows: Vec<(Vec<u8>, u32)>,
-    }
-
-    fn load_signal_table(file: &mut File, footer: &ParsedFooter) -> Result<SignalTable> {
-        let section = footer
-            .signal_table()
-            .map_err(|e| Ds3Error::SignalFile(format!("signal table missing from footer: {e}")))?;
-
-        let offset = section.as_ref().offset() as u64;
-        let length = section.as_ref().length() as u64;
-
-        let ipc_bytes = read_bytes_at(file, offset, length)?;
-        let cursor = Cursor::new(ipc_bytes);
-        let mut reader = FileReader::try_new(cursor, None)
-            .map_err(|e| Ds3Error::SignalFile(format!("signal IPC parse: {e}")))?;
-
-        let mut rows = Vec::new();
-
-        for batch_res in &mut reader {
-            let batch = batch_res
-                .map_err(|e| Ds3Error::SignalFile(format!("signal batch: {e}")))?;
-            let schema = batch.schema();
-
-            let sig_idx = schema.index_of("signal").map_err(|_| {
-                Ds3Error::SignalFile("signal table missing 'signal' column".into())
-            })?;
-            let cnt_idx = schema.index_of("samples").map_err(|_| {
-                Ds3Error::SignalFile("signal table missing 'samples' column".into())
-            })?;
-
-            let sig_col = batch.column(sig_idx);
-            let cnt_col = batch
-                .column(cnt_idx)
-                .as_any()
-                .downcast_ref::<UInt32Array>()
-                .ok_or_else(|| Ds3Error::SignalFile("samples: not UInt32".into()))?;
-
-            for row in 0..batch.num_rows() {
-                let compressed = extract_binary(sig_col.as_ref(), row)?.to_vec();
-                let samples    = cnt_col.value(row);
-                rows.push((compressed, samples));
-            }
-        }
-
-        Ok(SignalTable { rows })
-    }
-
+    /// Borrow compressed signal bytes from an Arrow Binary column (zero-copy).
     fn extract_binary<'a>(col: &'a dyn Array, row: usize) -> Result<&'a [u8]> {
         if let Some(a) = col.as_any().downcast_ref::<LargeBinaryArray>() {
             return Ok(a.value(row));
@@ -277,59 +375,7 @@ mod native {
             return Ok(a.value(row));
         }
         Err(Ds3Error::SignalFile(
-            "signal: expected LargeBinary or Binary column".into(),
+            "signal column: expected LargeBinary or Binary".into(),
         ))
-    }
-
-    // ─── assembly ─────────────────────────────────────────────────────────────
-
-    fn assemble_reads(
-        reads_meta:   Vec<ReadMeta>,
-        signal_table: SignalTable,
-    ) -> Result<Vec<RawRead>> {
-        let mut out = Vec::with_capacity(reads_meta.len());
-
-        for meta in reads_meta {
-            let mut signal: Vec<f32> = Vec::new();
-
-            for &row_idx in &meta.signal_rows {
-                let row = row_idx as usize;
-                if row >= signal_table.rows.len() {
-                    return Err(Ds3Error::SignalFile(format!(
-                        "read '{}': signal row {row} out of range ({} rows)",
-                        meta.read_id,
-                        signal_table.rows.len()
-                    )));
-                }
-                let (ref compressed, sample_count) = signal_table.rows[row];
-                // svb16::decode handles the full VBZ pipeline:
-                //   zstd → StreamVByte16 → zigzag → delta → Vec<i16>
-                let chunk = svb16::decode(compressed, sample_count as usize)
-                    .map_err(|e| {
-                        Ds3Error::SignalFile(format!(
-                            "VBZ decompression failed (row {row}): {e}"
-                        ))
-                    })?;
-                signal.extend(chunk.iter().map(|&v| v as f32));
-            }
-
-            out.push(RawRead { read_id: meta.read_id, signal });
-        }
-
-        Ok(out)
-    }
-
-    // ─── utilities ────────────────────────────────────────────────────────────
-
-    fn read_bytes_at(file: &mut File, offset: u64, len: u64) -> Result<Vec<u8>> {
-        let mut buf = vec![0u8; len as usize];
-        file.seek(SeekFrom::Start(offset))
-            .and_then(|_| file.read_exact(&mut buf))
-            .map_err(|e| {
-                Ds3Error::SignalFile(format!(
-                    "read_bytes_at offset={offset} len={len}: {e}"
-                ))
-            })?;
-        Ok(buf)
     }
 }

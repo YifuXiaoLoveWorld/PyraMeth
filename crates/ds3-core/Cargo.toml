@@ -27,7 +27,8 @@ uuid        = { version = "1", features = ["v4"] }
 pod5-format = { git = "https://github.com/bsaintjo/pod5-rs", optional = true }
 svb16       = { git = "https://github.com/bsaintjo/pod5-rs", optional = true }
 arrow       = { version = "54", features = ["ipc"], optional = true }
+memmap2     = { version = "0.9", optional = true }
 
 [features]
 default   = []
-pod5-pure = ["dep:pod5-format", "dep:svb16", "dep:arrow"]
+pod5-pure = ["dep:pod5-format", "dep:svb16", "dep:arrow", "dep:memmap2"]

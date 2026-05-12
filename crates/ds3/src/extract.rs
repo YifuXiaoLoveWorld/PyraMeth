@@ -14,13 +14,15 @@ use clap::Args;
 use rayon::prelude::*;
 
 use ds3_core::{
+    error::Result as Ds3Result,
     features::{
         bilstm_feature_to_tsv, process_data_bilstm, ExtractionArgs,
     },
     io::{
         bam::ReadIndexedBam,
-        pod5::read_pod5,
+        pod5::iter_pod5,
         slow5::read_slow5,
+        RawRead,
     },
     kmer::get_motif_seqs,
     signal::NormalizeMethod,
@@ -141,41 +143,21 @@ pub fn run(args: ExtractArgs) -> anyhow::Result<()> {
     signal_files
         .par_iter()
         .try_for_each(|file| -> anyhow::Result<()> {
-            let reads = match file_type.as_str() {
-                "pod5"  => read_pod5(file)?,
-                "slow5" => read_slow5(file)?,
-                other   => anyhow::bail!("unsupported file type '{other}'"),
-            };
-
-            for raw_read in reads {
-                let alignments = match bam_index.get_alignments(&raw_read.read_id) {
-                    Ok(a) => a,
-                    Err(_) => continue,
-                };
-
-                for aln in &alignments {
-                    // Use BiLSTM path (includes mean/std/len) which is
-                    // compatible with the extract TSV format
-                    let feats = process_data_bilstm(
-                        &raw_read.signal,
-                        aln,
-                        &ext_args,
-                    )?;
-
-                    for feat in &feats {
-                        let k_mer: Vec<u8> = feat
-                            .k_seq
-                            .iter()
-                            .filter_map(|&c| ds3_core::kmer::code_to_base(c as u64))
-                            .collect();
-                        let line = bilstm_feature_to_tsv(feat, &k_mer);
-
-                        let mut wf = writer.lock().unwrap();
-                        writeln!(wf, "{line}")?;
-                    }
-                }
+            match file_type.as_str() {
+                "pod5" => process_reads(
+                    iter_pod5(file)?,
+                    &bam_index,
+                    &ext_args,
+                    &writer,
+                ),
+                "slow5" => process_reads(
+                    read_slow5(file)?.into_iter().map(|r| -> Ds3Result<RawRead> { Ok(r) }),
+                    &bam_index,
+                    &ext_args,
+                    &writer,
+                ),
+                other => anyhow::bail!("unsupported file type '{other}'"),
             }
-            Ok(())
         })?;
 
     // Ensure final flush
@@ -185,6 +167,35 @@ pub fn run(args: ExtractArgs) -> anyhow::Result<()> {
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
+
+fn process_reads(
+    reads: impl Iterator<Item = Ds3Result<RawRead>>,
+    bam_index: &ReadIndexedBam,
+    ext_args: &ExtractionArgs,
+    writer: &Arc<Mutex<BufWriter<File>>>,
+) -> anyhow::Result<()> {
+    for raw_read_result in reads {
+        let raw_read = raw_read_result?;
+        let alignments = match bam_index.get_alignments(&raw_read.read_id) {
+            Ok(a)  => a,
+            Err(_) => continue,
+        };
+        for aln in &alignments {
+            let feats = process_data_bilstm(&raw_read.signal, aln, ext_args)?;
+            for feat in &feats {
+                let k_mer: Vec<u8> = feat
+                    .k_seq
+                    .iter()
+                    .filter_map(|&c| ds3_core::kmer::code_to_base(c as u64))
+                    .collect();
+                let line = bilstm_feature_to_tsv(feat, &k_mer);
+                let mut wf = writer.lock().unwrap();
+                writeln!(wf, "{line}")?;
+            }
+        }
+    }
+    Ok(())
+}
 
 fn detect_and_collect(input_dir: &PathBuf) -> anyhow::Result<(String, Vec<PathBuf>)> {
     let mut pod5 = Vec::new();
