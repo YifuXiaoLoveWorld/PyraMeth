@@ -19,7 +19,7 @@ use ds3_core::{
         bilstm_feature_to_tsv, process_data_bilstm, ExtractionArgs,
     },
     io::{
-        bam::ReadIndexedBam,
+        bam::{BamSearcher, ReadIndexedBam},
         pod5::iter_pod5,
         slow5::read_slow5,
         RawRead,
@@ -139,20 +139,23 @@ pub fn run(args: ExtractArgs) -> anyhow::Result<()> {
         .build_global()
         .ok(); // ignore if already configured
 
-    // Process files in parallel
+    // Process files in parallel.
+    // Each task creates its own BamSearcher — one BAM file open per pod5 file
+    // instead of one open per read (the previous bottleneck).
     signal_files
         .par_iter()
         .try_for_each(|file| -> anyhow::Result<()> {
+            let mut searcher = BamSearcher::new(&bam_index)?;
             match file_type.as_str() {
                 "pod5" => process_reads(
                     iter_pod5(file)?,
-                    &bam_index,
+                    &mut searcher,
                     &ext_args,
                     &writer,
                 ),
                 "slow5" => process_reads(
                     read_slow5(file)?.into_iter().map(|r| -> Ds3Result<RawRead> { Ok(r) }),
-                    &bam_index,
+                    &mut searcher,
                     &ext_args,
                     &writer,
                 ),
@@ -170,16 +173,24 @@ pub fn run(args: ExtractArgs) -> anyhow::Result<()> {
 
 fn process_reads(
     reads: impl Iterator<Item = Ds3Result<RawRead>>,
-    bam_index: &ReadIndexedBam,
+    searcher: &mut BamSearcher,
     ext_args: &ExtractionArgs,
     writer: &Arc<Mutex<BufWriter<File>>>,
 ) -> anyhow::Result<()> {
+    // Reuse a single String buffer across reads to avoid per-read allocation.
+    // The mutex is acquired once per read instead of once per output line,
+    // which dramatically reduces lock contention across parallel threads.
+    let mut local_buf = String::with_capacity(8192);
+
     for raw_read_result in reads {
         let raw_read = raw_read_result?;
-        let alignments = match bam_index.get_alignments(&raw_read.read_id) {
+        let alignments = match searcher.get_alignments(&raw_read.read_id) {
+            Ok(a) if a.is_empty() => continue,
             Ok(a)  => a,
             Err(_) => continue,
         };
+
+        local_buf.clear();
         for aln in &alignments {
             let feats = process_data_bilstm(&raw_read.signal, aln, ext_args)?;
             for feat in &feats {
@@ -188,10 +199,13 @@ fn process_reads(
                     .iter()
                     .filter_map(|&c| ds3_core::kmer::code_to_base(c as u64))
                     .collect();
-                let line = bilstm_feature_to_tsv(feat, &k_mer);
-                let mut wf = writer.lock().unwrap();
-                writeln!(wf, "{line}")?;
+                local_buf.push_str(&bilstm_feature_to_tsv(feat, &k_mer));
+                local_buf.push('\n');
             }
+        }
+        if !local_buf.is_empty() {
+            let mut wf = writer.lock().unwrap();
+            wf.write_all(local_buf.as_bytes())?;
         }
     }
     Ok(())

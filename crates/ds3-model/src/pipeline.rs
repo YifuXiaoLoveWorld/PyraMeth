@@ -37,7 +37,7 @@ use tch::Device;
 use ds3_core::{
     features::{BiLstmFeature, ExtractionArgs, MtmFeature},
     io::{
-        bam::ReadIndexedBam,
+        bam::{BamSearcher, ReadIndexedBam},
         pod5::index_pod5,
         slow5::index_slow5,
     },
@@ -435,7 +435,6 @@ fn signal_producers(
         )
         .enumerate()
         .try_for_each(|(shard_id, files)| -> anyhow::Result<()> {
-            // Each shard gets its own BAM reader (cloned index, separate file handle)
             let bam  = bam_index.clone();
             let args = ext_args.clone();
             let ft   = file_type.to_string();
@@ -447,6 +446,10 @@ fn signal_producers(
 
             // Round-robin GPU assignment for this shard
             let tx = &batch_txs[shard_id % n_workers];
+
+            // One BAM file handle per shard — seeks within it instead of
+            // opening a new file + re-parsing the header for every read.
+            let mut searcher = BamSearcher::new(&bam)?;
 
             let mut mtm_batch    = Vec::with_capacity(batch_size);
             let mut bilstm_batch = Vec::with_capacity(batch_size);
@@ -461,7 +464,7 @@ fn signal_producers(
                 for (read_id, signal) in &signal_map {
                     cnt_total.fetch_add(1, Ordering::Relaxed);
 
-                    let alignments = match bam.get_alignments(read_id) {
+                    let alignments = match searcher.get_alignments(read_id) {
                         Ok(a) if a.is_empty() => {
                             cnt_no_bam.fetch_add(1, Ordering::Relaxed);
                             continue;

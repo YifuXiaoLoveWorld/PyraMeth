@@ -8,11 +8,13 @@ use std::{
     fs::File,
     io::BufReader,
     path::Path,
+    sync::Arc,
 };
 
 use noodles::{
     bam,
     bgzf::VirtualPosition,
+    sam,
     sam::alignment::record::data::field::Tag,
 };
 
@@ -116,6 +118,8 @@ pub struct ReadIndexedBam {
     bam_path: std::path::PathBuf,
     /// read_id  →  list of BGZF virtual positions in the BAM file
     index: HashMap<String, Vec<VirtualPosition>>,
+    /// Parsed BAM header, cached here so `BamSearcher` never re-reads it.
+    header: sam::Header,
     /// Total number of indexed records.
     pub num_records: usize,
 }
@@ -127,7 +131,8 @@ impl ReadIndexedBam {
         let mut reader = bam::io::Reader::new(BufReader::new(
             File::open(&path).map_err(Ds3Error::Bam)?,
         ));
-        reader.read_header().map_err(|e| Ds3Error::Bam(e))?;
+        // Cache the header so BamSearcher never has to re-read it.
+        let header = reader.read_header().map_err(|e| Ds3Error::Bam(e))?;
 
         let mut index: HashMap<String, Vec<VirtualPosition>> = HashMap::new();
         let mut num_records: usize = 0;
@@ -160,7 +165,7 @@ impl ReadIndexedBam {
             num_records
         );
 
-        Ok(Self { bam_path: path, index, num_records })
+        Ok(Self { bam_path: path, index, header, num_records })
     }
 
     /// Check whether a read ID is present in the index.
@@ -168,35 +173,57 @@ impl ReadIndexedBam {
         self.index.contains_key(read_id)
     }
 
-    /// Retrieve all alignment records for `read_id`.
-    ///
-    /// Opens the BAM file and seeks to each stored virtual position.
-    /// Returns an empty vec if the read ID is not in the index.
-    pub fn get_alignments(&self, read_id: &str) -> Result<Vec<AlnRecord>> {
-        let Some(positions) = self.index.get(read_id) else {
-            return Ok(Vec::new());
+    /// All read IDs in the index.
+    pub fn read_ids(&self) -> impl Iterator<Item = &str> {
+        self.index.keys().map(String::as_str)
+    }
+}
+
+// ─── BamSearcher ─────────────────────────────────────────────────────────────
+
+/// A reusable BAM reader that keeps one file handle open and uses the cached
+/// header from [`ReadIndexedBam`].
+///
+/// **Create one per processing unit** (one per pod5 file in `extract`, one per
+/// shard in `pipeline`).  The previous approach of calling
+/// `ReadIndexedBam::get_alignments` opened the file *and* re-parsed the full
+/// BAM header on every single read — easily 100 000+ times per pod5 file.
+/// `BamSearcher` reduces that to one open + one header skip per unit.
+pub struct BamSearcher {
+    index:  Arc<ReadIndexedBam>,
+    reader: bam::io::Reader<BufReader<File>>,
+}
+
+impl BamSearcher {
+    /// Open the BAM file once; header parsing is skipped (the cached header
+    /// stored in `ReadIndexedBam` is used instead).
+    pub fn new(bam_index: &Arc<ReadIndexedBam>) -> Result<Self> {
+        let file = File::open(&bam_index.bam_path).map_err(Ds3Error::Bam)?;
+        let reader = bam::io::Reader::new(BufReader::new(file));
+        // No read_header() call — we rely on the cached bam_index.header.
+        // BGZF virtual-position seeks work without touching the header region.
+        Ok(Self { index: Arc::clone(bam_index), reader })
+    }
+
+    /// Retrieve all alignment records for `read_id`, seeking within the already-
+    /// open file handle.  Returns an empty `Vec` when the read is not in the BAM.
+    pub fn get_alignments(&mut self, read_id: &str) -> Result<Vec<AlnRecord>> {
+        // Clone positions so we can mutably borrow self.reader in the loop.
+        let positions: Vec<VirtualPosition> = match self.index.index.get(read_id) {
+            Some(p) => p.clone(),
+            None    => return Ok(Vec::new()),
         };
 
-        let file = File::open(&self.bam_path).map_err(Ds3Error::Bam)?;
-        let mut reader = bam::io::Reader::new(BufReader::new(file));
-        let header = reader.read_header().map_err(|e| Ds3Error::Bam(e))?;
-
-        let ref_seqs = header.reference_sequences();
         let mut out = Vec::with_capacity(positions.len());
-
-        for &vpos in positions {
-            reader.get_mut().seek(vpos).map_err(|e| Ds3Error::Bam(e))?;
+        for vpos in positions {
+            self.reader.get_mut().seek(vpos).map_err(Ds3Error::Bam)?;
             let mut raw = bam::Record::default();
-            reader.read_record(&mut raw).map_err(|e| Ds3Error::Bam(e))?;
+            self.reader.read_record(&mut raw).map_err(|e| Ds3Error::Bam(e))?;
+            let ref_seqs = self.index.header.reference_sequences();
             let aln = decode_record(&raw, ref_seqs, read_id)?;
             out.push(aln);
         }
         Ok(out)
-    }
-
-    /// All read IDs in the index.
-    pub fn read_ids(&self) -> impl Iterator<Item = &str> {
-        self.index.keys().map(String::as_str)
     }
 }
 
