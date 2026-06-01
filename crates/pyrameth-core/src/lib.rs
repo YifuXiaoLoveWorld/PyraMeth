@@ -1,5 +1,5 @@
-//! ds3-core — signal processing, file I/O, and feature extraction
-//! for the deepsignal3 methylation calling pipeline.
+//! pyrameth-core — signal processing, file I/O, and feature extraction
+//! for the PyraMeth methylation calling pipeline.
 
 #![deny(missing_docs)]
 #![warn(clippy::pedantic)]

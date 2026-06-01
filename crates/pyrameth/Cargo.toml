@@ -1,15 +1,15 @@
 [package]
-name    = "ds3"
+name    = "pyrameth"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "ds3"
+name = "pyrameth"
 path = "src/main.rs"
 
 [dependencies]
-ds3-core  = { workspace = true }
-ds3-model = { workspace = true }
+pyrameth-core  = { workspace = true }
+pyrameth-model = { workspace = true }
 clap      = { workspace = true }
 anyhow    = { workspace = true }
 log       = { workspace = true }
@@ -21,5 +21,5 @@ tch       = "0.18"
 [features]
 default   = []
 # Enable native POD5 reading (pure Rust, no libpod5 required).
-# Pass through to ds3-core: cargo build --features pod5-pure
-pod5-pure = ["ds3-core/pod5-pure"]
+# Pass through to pyrameth-core: cargo build --features pod5-pure
+pod5-pure = ["pyrameth-core/pod5-pure"]

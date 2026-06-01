@@ -1,9 +1,9 @@
-//! deepsignal3 Rust CLI (`ds3`)
+//! PyraMeth Rust CLI (`pyrameth`)
 //!
 //! Sub-commands:
-//!   ds3 call_mods  — detect methylation (signal → per-read probabilities)
-//!   ds3 call_freq  — aggregate per-read calls to genome-level frequency
-//!   ds3 extract    — extract features to TSV (for downstream training/testing)
+//!   pyrameth call_mods  — detect methylation (signal → per-read probabilities)
+//!   pyrameth call_freq  — aggregate per-read calls to genome-level frequency
+//!   pyrameth extract    — extract features to TSV (for downstream training/testing)
 
 mod call_freq;
 mod call_mods;
@@ -13,9 +13,9 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(
-    name    = "ds3",
+    name    = "pyrameth",
     version = env!("CARGO_PKG_VERSION"),
-    about   = "DeepSignal3 — fast nanopore methylation calling (Rust)",
+    about   = "PyraMeth — fast nanopore methylation calling (Rust)",
     long_about = None,
 )]
 struct Cli {

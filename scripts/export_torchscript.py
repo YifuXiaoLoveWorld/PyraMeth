@@ -2,8 +2,8 @@
 """
 export_torchscript.py
 =====================
-Convert a deepsignal3 .ckpt checkpoint to TorchScript (.pt) format
-so it can be loaded by the Rust ds3-model crate via `tch::CModule`.
+Convert a PyraMeth .ckpt checkpoint to TorchScript (.pt) format
+so it can be loaded by the Rust pyrameth-model crate via `tch::CModule`.
 
 Usage
 -----
@@ -33,11 +33,11 @@ import sys
 import torch
 
 
-# ── Add deepsignal3 package to path ───────────────────────────────────────────
-# Adjust if the deepsignal3 Python package lives elsewhere.
+# ── Add pyrameth package to path ───────────────────────────────────────────
+# Adjust if the pyrameth Python package lives elsewhere.
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[2]))
 
-from deepsignal3.models import AggrAttRNN, ModelBiLSTM, modelMTM  # type: ignore
+from pyrameth.models import AggrAttRNN, ModelBiLSTM, modelMTM  # type: ignore
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -250,7 +250,7 @@ def export_aggr(args):
 
 def main():
     p = argparse.ArgumentParser(
-        description="Export a deepsignal3 .ckpt to TorchScript (.pt) for Rust inference.",
+        description="Export a PyraMeth .ckpt to TorchScript (.pt) for Rust inference.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 

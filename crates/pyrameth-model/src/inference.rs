@@ -6,7 +6,7 @@
 
 use tch::{Device, Kind, Tensor, no_grad};
 
-use ds3_core::{
+use pyrameth_core::{
     features::{BiLstmFeature, MtmFeature},
     kmer::{code_to_base, central5mer},
 };

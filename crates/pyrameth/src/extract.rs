@@ -1,4 +1,4 @@
-//! `ds3 extract` — extract signal features to TSV.
+//! `pyrameth extract` — extract signal features to TSV.
 //!
 //! Mirrors Python `extract_features_pod5.py::extract_features`.
 //! Output: 12-column TSV suitable for training / evaluation.
@@ -13,7 +13,7 @@ use std::{
 use clap::Args;
 use rayon::prelude::*;
 
-use ds3_core::{
+use pyrameth_core::{
     error::Result as Ds3Result,
     features::{
         bilstm_feature_to_tsv, process_data_bilstm, ExtractionArgs,
@@ -30,7 +30,7 @@ use ds3_core::{
 
 // ─── CLI args ─────────────────────────────────────────────────────────────────
 
-/// Arguments for `ds3 extract`.
+/// Arguments for `pyrameth extract`.
 #[derive(Args, Debug)]
 pub struct ExtractArgs {
     // ── INPUT ──────────────────────────────────────────────────────────────
@@ -197,7 +197,7 @@ fn process_reads(
                 let k_mer: Vec<u8> = feat
                     .k_seq
                     .iter()
-                    .filter_map(|&c| ds3_core::kmer::code_to_base(c as u64))
+                    .filter_map(|&c| pyrameth_core::kmer::code_to_base(c as u64))
                     .collect();
                 local_buf.push_str(&bilstm_feature_to_tsv(feat, &k_mer));
                 local_buf.push('\n');

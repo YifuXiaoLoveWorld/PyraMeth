@@ -1,4 +1,4 @@
-//! ds3-model — TorchScript model loading and multi-GPU inference pipeline.
+//! pyrameth-model — TorchScript model loading and multi-GPU inference pipeline.
 //!
 //! # Design
 //!

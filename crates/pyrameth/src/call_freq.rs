@@ -1,4 +1,4 @@
-//! `ds3 call_freq` — aggregate per-read modification calls to genome-level
+//! `pyrameth call_freq` — aggregate per-read modification calls to genome-level
 //! modification frequency.
 //!
 //! Two modes:
@@ -18,14 +18,14 @@ use std::{
 };
 
 use clap::Args;
-use ds3_model::{normalized_histogram, run_aggr_model};
+use pyrameth_model::{normalized_histogram, run_aggr_model};
 
 // ─── CLI args ─────────────────────────────────────────────────────────────────
 
-/// Arguments for `ds3 call_freq`.
+/// Arguments for `pyrameth call_freq`.
 #[derive(Args, Debug)]
 pub struct CallFreqArgs {
-    /// Input file(s) or directory from `ds3 call_mods` output.
+    /// Input file(s) or directory from `pyrameth call_mods` output.
     /// Can be specified multiple times.
     #[arg(short = 'i', long = "input_path", required = true, num_args = 1..)]
     pub input_paths: Vec<PathBuf>,
@@ -154,7 +154,7 @@ struct SiteTrack {
 
 /// Read per-read TSV, aggregate per site, build histograms.
 ///
-/// Input line format (from `ds3 call_mods` output):
+/// Input line format (from `pyrameth call_mods` output):
 /// `chrom\tpos\tstrand\tpos_in_strand\treadname\tread_loc\tprob0\tprob1\tpred\tkmer5`
 fn prepare_site_data(
     files:    &[PathBuf],

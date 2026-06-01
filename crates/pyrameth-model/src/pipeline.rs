@@ -34,7 +34,7 @@ use crossbeam_channel::{bounded, Receiver, Sender};
 use rayon::prelude::*;
 use tch::Device;
 
-use ds3_core::{
+use pyrameth_core::{
     error::Result as Ds3Result,
     features::{BiLstmFeature, ExtractionArgs, MtmFeature},
     io::{
@@ -479,7 +479,7 @@ fn signal_producers(
                     for aln in &alignments {
                         match model_class {
                             ModelClass::Mtm => {
-                                match ds3_core::features::process_data_mtm(signal, aln, &args) {
+                                match pyrameth_core::features::process_data_mtm(signal, aln, &args) {
                                     Ok(feats) => {
                                         cnt_feat.fetch_add(feats.len(), Ordering::Relaxed);
                                         mtm_batch.extend(feats);
@@ -498,7 +498,7 @@ fn signal_producers(
                                 }
                             }
                             ModelClass::BiLstm => {
-                                match ds3_core::features::process_data_bilstm(signal, aln, &args) {
+                                match pyrameth_core::features::process_data_bilstm(signal, aln, &args) {
                                     Ok(feats) => {
                                         cnt_feat.fetch_add(feats.len(), Ordering::Relaxed);
                                         bilstm_batch.extend(feats);
@@ -569,7 +569,7 @@ fn tsv_producer(
     batch_tx: &Sender<Batch>,
     batch_size: usize,
 ) -> anyhow::Result<()> {
-    use ds3_core::kmer::base_to_code;
+    use pyrameth_core::kmer::base_to_code;
     use std::io::{BufRead, BufReader};
 
     let file: Box<dyn std::io::Read> = if tsv_path.extension().map_or(false, |e| e == "gz") {

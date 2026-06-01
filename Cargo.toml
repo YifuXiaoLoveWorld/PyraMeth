@@ -1,5 +1,5 @@
 [workspace]
-members  = ["crates/ds3-core", "crates/ds3-model", "crates/ds3"]
+members  = ["crates/pyrameth-core", "crates/pyrameth-model", "crates/pyrameth"]
 resolver = "2"
 
 # ── workspace-wide shared dependency versions ────────────────────────────────
@@ -11,8 +11,8 @@ env_logger        = "0.11"
 crossbeam-channel = "0.5"
 rayon             = "1"
 clap              = { version = "4", features = ["derive"] }
-ds3-core          = { path = "crates/ds3-core" }
-ds3-model         = { path = "crates/ds3-model" }
+pyrameth-core          = { path = "crates/pyrameth-core" }
+pyrameth-model         = { path = "crates/pyrameth-model" }
 
 # ── release profile: maximise throughput ────────────────────────────────────
 [profile.release]

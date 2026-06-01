@@ -168,7 +168,7 @@ fn parse_body<R: BufRead>(reader: &mut R, col: &ColumnMap) -> Result<Vec<RawRead
 ///
 /// The raw signal in slow5 is stored as `int16_t*`; we cast directly to f32
 /// without any calibration — calibration (offset/range/digitisation) is
-/// deliberately omitted because deepsignal3 performs its own MAD normalisation.
+/// deliberately omitted because PyraMeth performs its own MAD normalisation.
 #[inline]
 fn parse_signal(s: &str) -> Result<Vec<f32>> {
     s.split(',')

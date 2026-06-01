@@ -1,10 +1,10 @@
 [package]
-name    = "ds3-model"
+name    = "pyrameth-model"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ds3-core          = { workspace = true }
+pyrameth-core          = { workspace = true }
 thiserror         = { workspace = true }
 log               = { workspace = true }
 crossbeam-channel = { workspace = true }

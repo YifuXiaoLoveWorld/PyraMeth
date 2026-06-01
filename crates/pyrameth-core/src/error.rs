@@ -1,8 +1,8 @@
-//! Unified error type for ds3-core.
+//! Unified error type for pyrameth-core.
 
 use thiserror::Error;
 
-/// All errors that can occur in ds3-core.
+/// All errors that can occur in pyrameth-core.
 #[derive(Debug, Error)]
 pub enum Ds3Error {
     /// BAM / alignment file errors.

@@ -1,4 +1,4 @@
-# deepsignal3-rs — Build & Setup Guide
+# pyrameth-rs — Build & Setup Guide
 
 ## Prerequisites
 
@@ -35,7 +35,7 @@ Without that feature the binary exits with a clear error message.
 ## Step 1 — Export model to TorchScript
 
 ```bash
-cd e:/code/deepsignal3-rs
+cd e:/code/pyrameth-rs
 
 # modelMTM (default, recommended)
 python scripts/export_torchscript.py \
@@ -56,7 +56,7 @@ python scripts/export_torchscript.py \
 ## Step 2 — Build
 
 ```bash
-cd e:/code/deepsignal3-rs
+cd e:/code/pyrameth-rs
 
 # Debug build (fast compile); Slow5/Blow5 native, POD5 disabled
 cargo build
@@ -68,13 +68,13 @@ cargo build --release --features pod5-pure
 cargo build --release
 ```
 
-The binary appears at `target/release/ds3` (Linux/macOS) or
-`target\release\ds3.exe` (Windows).
+The binary appears at `target/release/pyrameth` (Linux/macOS) or
+`target\release\pyrameth.exe` (Windows).
 
 > **POD5 feature note**: `--features pod5-pure` enables native POD5 reading via
 > `pod5-format` (FlatBuffers footer), `svb16` (VBZ decompression), and `arrow`
 > (IPC table reader) — all pure Rust, no C library required.  Without this
-> flag, running `ds3` on POD5 files prints an informative error and exits.
+> flag, running `pyrameth` on POD5 files prints an informative error and exits.
 
 ---
 
@@ -82,7 +82,7 @@ The binary appears at `target/release/ds3` (Linux/macOS) or
 
 ### call-mods (methylation inference)
 ```bash
-./target/release/ds3 call-mods \
+./target/release/pyrameth call-mods \
     --input-path /data/pod5/ \
     --bam        /data/aligned.bam \
     --model-path ../model/human_r1041_5khz_CG_epoch5.pt \
@@ -95,13 +95,13 @@ The binary appears at `target/release/ds3` (Linux/macOS) or
 ### call-freq (genome-level frequency)
 ```bash
 # Count-based TSV
-./target/release/ds3 call-freq \
+./target/release/pyrameth call-freq \
     --input-path /data/mods.tsv \
     --result-file /data/freq.tsv \
     --prob-cf 0.5 --sort
 
 # Count-based bedMethyl
-./target/release/ds3 call-freq \
+./target/release/pyrameth call-freq \
     --input-path /data/mods.tsv \
     --result-file /data/freq.bed \
     --bed --sort
@@ -114,7 +114,7 @@ python scripts/export_torchscript.py \
     --model_class aggr
 
 # Step 2: run refined frequency calling
-./target/release/ds3 call-freq \
+./target/release/pyrameth call-freq \
     --input-path  /data/mods.tsv \
     --result-file /data/freq_aggr.bed \
     --aggre-model ../model/aggr_model.pt \
@@ -123,7 +123,7 @@ python scripts/export_torchscript.py \
 
 ### extract (feature extraction to TSV)
 ```bash
-./target/release/ds3 extract \
+./target/release/pyrameth extract \
     --input-dir /data/pod5/ \
     --bam       /data/aligned.bam \
     --write-path /data/features.tsv \

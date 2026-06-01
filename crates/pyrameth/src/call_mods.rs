@@ -1,14 +1,14 @@
-//! `ds3 call_mods` — unified inference sub-command.
+//! `pyrameth call_mods` — unified inference sub-command.
 //!
 //! Mirrors Python `call_modifications.py::inference_ultra` CLI arguments.
 
 use std::path::PathBuf;
 
 use clap::Args;
-use ds3_core::signal::NormalizeMethod;
-use ds3_model::pipeline::{InferenceConfig, ModelClass, run_inference};
+use pyrameth_core::signal::NormalizeMethod;
+use pyrameth_model::pipeline::{InferenceConfig, ModelClass, run_inference};
 
-/// Arguments for `ds3 call_mods`.
+/// Arguments for `pyrameth call_mods`.
 #[derive(Args, Debug)]
 pub struct CallModsArgs {
     // ── INPUT ──────────────────────────────────────────────────────────────
