@@ -39,7 +39,7 @@ use pyrameth_core::{
     features::{BiLstmFeature, ExtractionArgs, MtmFeature},
     io::{
         bam::{BamSearcher, ReadIndexedBam},
-        pod5::iter_pod5,
+        pod5::read_pod5_filtered,
         slow5::read_slow5,
         RawRead,
     },
@@ -438,8 +438,15 @@ fn signal_producers(
             let mut bilstm_batch = Vec::with_capacity(batch_size);
 
             for file in files {
+                // For POD5 we hand the BAM-membership test straight to the
+                // reader, so signal for reads absent from the BAM is never
+                // decompressed (mirrors the extract_pod5 reference).
                 let reads: Box<dyn Iterator<Item = Ds3Result<RawRead>>> = match ft.as_str() {
-                    "pod5"  => iter_pod5(file.clone())?,
+                    "pod5"  => Box::new(
+                        read_pod5_filtered(file, |rid| bam.contains(rid))?
+                            .into_iter()
+                            .map(|r| -> Ds3Result<RawRead> { Ok(r) }),
+                    ),
                     "slow5" => Box::new(
                         read_slow5(file.clone())?
                             .into_iter()

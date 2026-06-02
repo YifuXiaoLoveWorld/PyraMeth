@@ -19,16 +19,16 @@ crossbeam-channel = { workspace = true }
 uuid        = { version = "1", features = ["v4"] }
 
 # ── optional: native POD5 reading ────────────────────────────────────────────
-# Pure-Rust; no C library required.  Uses:
-#   pod5-format — FlatBuffers footer parsing (correct POD5 spec)
-#   svb16       — signal decompression (zstd + streamvbyte + zigzag + delta)
-#   arrow       — Arrow IPC file-format reader for reads/signal tables
+# POD5 reading via the pod5-polars DataFrame API (bsaintjo/pod5-rs).
+# This is the same interface used by the `extract_pod5` reference: a `Reader`
+# exposing `read_dfs()` / `signal_dfs()`, with VBZ (zstd + streamvbyte + zigzag
+# + delta) decompression handled inside the crate and ADC→picoamp calibration
+# applied via `to_picoamps`.  Pure Rust; no C library required.  Pulls in
+# polars, so it stays behind the `pod5-pure` feature.
+# Pinned to the same revision the extract_pod5 reference uses.
 # Enable with: cargo build --features pod5-pure
-pod5-format = { git = "https://github.com/bsaintjo/pod5-rs", optional = true }
-svb16       = { git = "https://github.com/bsaintjo/pod5-rs", optional = true }
-arrow       = { version = "54", features = ["ipc"], optional = true }
-memmap2     = { version = "0.9", optional = true }
+pod5 = { git = "https://github.com/bsaintjo/pod5-rs", package = "pod5-polars", rev = "8d6a6832d71c1980b3dc8d98a978b83d2a3b5680", optional = true }
 
 [features]
 default   = []
-pod5-pure = ["dep:pod5-format", "dep:svb16", "dep:arrow", "dep:memmap2"]
+pod5-pure = ["dep:pod5"]
