@@ -27,8 +27,9 @@ pip install torch   # for export_torchscript.py
 Slow5/Blow5 reading is pure Rust — no Python or C library needed.
 
 POD5 reading is native Rust when built with `--features pod5-pure`
-(uses the `pod5-polars` DataFrame reader from bsaintjo/pod5-rs — pure Rust, no
-C library, but pulls in `polars` so it is kept behind the feature flag).
+(`pod5-format` + `svb16` + `arrow` from bsaintjo/pod5-rs — pure Rust, no C
+library, no polars).  It decodes signal straight to raw ADC and only
+decompresses the rows belonging to reads present in the BAM index.
 Without that feature the binary exits with a clear error message.
 
 ---
@@ -73,12 +74,11 @@ The binary appears at `target/release/pyrameth` (Linux/macOS) or
 `target\release\pyrameth.exe` (Windows).
 
 > **POD5 feature note**: `--features pod5-pure` enables native POD5 reading via
-> the `pod5-polars` `Reader` (`read_dfs()` / `signal_dfs()` DataFrame API, with
-> VBZ decompression handled inside the crate) — pure Rust, no C library required.
-> Signals are kept as raw ADC (matching Python's `pod5_record.signal`).  It only
-> decompresses signal for reads present in the BAM index.  Without this flag,
-> running `pyrameth` on POD5 files prints an
-> informative error and exits.
+> `pod5-format` (FlatBuffers footer), `svb16` (VBZ decompression), and `arrow`
+> (IPC table reader) — all pure Rust, no C library, no polars.  Signal is decoded
+> to raw ADC i16 (matching Python's `pod5_record.signal`), and only the rows of
+> reads present in the BAM index are decompressed.  Without this flag, running
+> `pyrameth` on POD5 files prints an informative error and exits.
 
 ---
 
