@@ -74,9 +74,10 @@ The binary appears at `target/release/pyrameth` (Linux/macOS) or
 
 > **POD5 feature note**: `--features pod5-pure` enables native POD5 reading via
 > the `pod5-polars` `Reader` (`read_dfs()` / `signal_dfs()` DataFrame API, with
-> VBZ decompression and ADC→picoamp calibration handled inside the crate) — pure
-> Rust, no C library required.  It only decompresses signal for reads present in
-> the BAM index.  Without this flag, running `pyrameth` on POD5 files prints an
+> VBZ decompression handled inside the crate) — pure Rust, no C library required.
+> Signals are kept as raw ADC (matching Python's `pod5_record.signal`).  It only
+> decompresses signal for reads present in the BAM index.  Without this flag,
+> running `pyrameth` on POD5 files prints an
 > informative error and exits.
 
 ---

@@ -15,21 +15,20 @@
 //! | reads  | `reader.read_dfs()`   | `read_id` (UUID str), `signal` (row idx)|
 //! | signal | `reader.signal_dfs()` | `signal` (VBZ-decompressed i16 chunks)  |
 //!
-//! VBZ decompression (zstd + streamvbyte + zigzag + delta) and ADC→picoamp
-//! calibration ([`to_picoamps`](pod5::dataframe::SignalDataFrame::to_picoamps))
-//! are handled inside the crate.  All pure Rust; no C library is required.
+//! VBZ decompression (zstd + streamvbyte + zigzag + delta) is handled inside
+//! the crate (`signal_dfs().next()` already yields decompressed `i16`).  All
+//! pure Rust; no C library is required.
 //!
 //! # Reading strategy (mirrors `extract_pod5`)
 //!
-//! 1. Build the per-read [`Calibration`] from the (small) reads table.
-//! 2. Walk the reads table again and keep only the reads of interest — the
+//! 1. Walk the reads table and keep only the reads of interest — the
 //!    [`read_pod5_filtered`] caller passes a `keep` predicate, typically
 //!    `|read_id| bam_index.contains(read_id)`.  For each kept read we record
 //!    its list of *signal row indices*.
-//! 3. Walk the signal table and decompress + convert to picoamps **only the
-//!    rows the kept reads actually need**, stopping as soon as every needed
-//!    chunk has been collected.
-//! 4. Concatenate each read's chunks into its full signal.
+//! 2. Walk the signal table and decompress **only the rows the kept reads
+//!    actually need**, stopping as soon as every needed chunk has been
+//!    collected.
+//! 3. Concatenate each read's chunks into its full signal.
 //!
 //! Because reads not present in the BAM never have their signal decompressed,
 //! this is substantially cheaper than decoding the whole file and filtering
@@ -37,10 +36,11 @@
 //!
 //! # Signal units
 //!
-//! Signals are returned in **picoamps** (`scale * (adc + offset)`).  The raw
-//! Python pipeline keeps ADC values, but MAD / z-score normalisation is
-//! invariant under the affine ADC→pA transform, so the extracted features are
-//! identical either way.
+//! Signals are returned as **raw ADC** values (`i16` cast to `f32`), exactly
+//! matching the Python pipeline — `extract_features_pod5.py` / `call_mods_bam.py`
+//! feed `pod5_record.signal` (raw ADC, **not** `signal_pa`) — and the Slow5
+//! reader, which also returns raw ADC.  No picoamp calibration is applied, so
+//! MAD / z-score normalisation downstream is bit-for-bit consistent with Python.
 //!
 //! # Feature flag
 //!
@@ -132,7 +132,6 @@ mod native {
     };
 
     use pod5::{
-        dataframe::Calibration,
         polars::prelude::{DataType, Series},
         reader::Reader,
     };
@@ -162,14 +161,6 @@ mod native {
         let mut reader =
             Reader::from_reader(file).map_err(|e| sig_err("POD5 footer parse error", e))?;
 
-        // Calibration is keyed by read_id and built from the (small) reads
-        // table; `to_picoamps` needs an entry for every read referenced by the
-        // signal table, so it must cover all reads, not just the kept ones.
-        let calibration = reader
-            .read_dfs()
-            .map_err(|e| sig_err("POD5 reads table", e))?
-            .into_calibration();
-
         let read_items = collect_relevant_reads(&mut reader, &keep)?;
         if read_items.is_empty() {
             return Ok(Vec::new());
@@ -180,7 +171,7 @@ mod native {
             .flat_map(|item| item.signal_indices.iter().copied())
             .collect();
 
-        let signal_chunks = collect_signal_chunks(&mut reader, &calibration, &needed)?;
+        let signal_chunks = collect_signal_chunks(&mut reader, &needed)?;
 
         let mut out = Vec::with_capacity(read_items.len());
         for item in read_items {
@@ -231,22 +222,21 @@ mod native {
         Ok(items)
     }
 
-    /// Decompress + convert to picoamps only the signal rows in `needed`,
-    /// keyed by their global row index, stopping once all are collected.
+    /// Decompress only the signal rows in `needed`, keyed by their global row
+    /// index, stopping once all are collected.
     fn collect_signal_chunks(
         reader: &mut Reader<File>,
-        calibration: &Calibration,
         needed: &HashSet<usize>,
     ) -> Result<HashMap<usize, Vec<f32>>> {
         let mut chunks = HashMap::with_capacity(needed.len());
         let mut global_row = 0usize;
 
         for signal_df in reader.signal_dfs().map_err(|e| sig_err("POD5 signal table", e))? {
-            // `next()` already decompressed the batch; `to_picoamps` applies the
-            // per-read ADC→pA calibration.
+            // `next()` already decompressed the batch to raw `i16` ADC values;
+            // we keep them as-is (matching Python's `pod5_record.signal`) and let
+            // downstream MAD / z-score normalisation handle scaling.
             let df = signal_df
                 .map_err(|e| sig_err("POD5 signal batch", e))?
-                .to_picoamps(calibration)
                 .into_inner();
             let signals = df
                 .column("signal")

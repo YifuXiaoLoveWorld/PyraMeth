@@ -22,9 +22,10 @@ uuid        = { version = "1", features = ["v4"] }
 # POD5 reading via the pod5-polars DataFrame API (bsaintjo/pod5-rs).
 # This is the same interface used by the `extract_pod5` reference: a `Reader`
 # exposing `read_dfs()` / `signal_dfs()`, with VBZ (zstd + streamvbyte + zigzag
-# + delta) decompression handled inside the crate and ADC→picoamp calibration
-# applied via `to_picoamps`.  Pure Rust; no C library required.  Pulls in
-# polars, so it stays behind the `pod5-pure` feature.
+# + delta) decompression handled inside the crate.  Signals are kept as raw ADC
+# (matching the Python pipeline's `pod5_record.signal`); no picoamp calibration
+# is applied.  Pure Rust; no C library required.  Pulls in polars, so it stays
+# behind the `pod5-pure` feature.
 # Pinned to the same revision the extract_pod5 reference uses.
 # Enable with: cargo build --features pod5-pure
 pod5 = { git = "https://github.com/bsaintjo/pod5-rs", package = "pod5-polars", rev = "8d6a6832d71c1980b3dc8d98a978b83d2a3b5680", optional = true }

@@ -105,8 +105,7 @@ fn preprocess_signal(
     let norm_signal = normalize_signals(trimmed, args.normalize_method);
 
     // Build rectangular signal matrix (NaN-padded)
-    let movetable_i32: Vec<i32> = aln.movetable.iter().map(|&x| x).collect();
-    let signal_rect = build_signal_rect(&norm_signal, &movetable_i32, aln.mv_stride, args.signal_len);
+    let signal_rect = build_signal_rect(&norm_signal, &aln.movetable, aln.mv_stride, args.signal_len);
 
     Some((norm_signal, signal_rect))
 }
@@ -224,8 +223,7 @@ pub fn process_data_bilstm(
     };
 
     // Variable-length signal groups for mean/std/len
-    let movetable_i32: Vec<i32> = aln.movetable.iter().map(|&x| x).collect();
-    let signal_group = match group_signals_by_movetable(&norm_signal, &movetable_i32, aln.mv_stride) {
+    let signal_group = match group_signals_by_movetable(&norm_signal, &aln.movetable, aln.mv_stride) {
         Ok(g) => g,
         Err(_) => return Ok(Vec::new()),
     };
