@@ -76,21 +76,23 @@ pub fn iter_pod5(
     }
 }
 
-/// Read only the reads for which `keep(read_id)` returns `true`.
+/// Streaming iterator over only the reads for which `keep(read_id)` is `true`.
 ///
-/// Only the signal rows belonging to kept reads are svb16-decompressed; reads
-/// rejected by `keep` cost nothing beyond the (cheap) reads-table scan.  Callers
-/// pass `|read_id| bam_index.contains(read_id)` so reads missing from the BAM
-/// are skipped before any signal is decoded.
+/// The reads table is scanned and filtered up front (cheap — metadata only),
+/// then signal is svb16-decompressed **lazily, one read at a time** as the
+/// iterator is consumed.  This keeps peak memory proportional to a single read
+/// rather than the whole file, while still skipping all signal of reads
+/// rejected by `keep`.  Callers pass `|read_id| bam_index.contains(read_id)` so
+/// reads missing from the BAM are dropped before any signal is decoded.
 ///
 /// Requires the `pod5-pure` Cargo feature.
-pub fn read_pod5_filtered(
+pub fn iter_pod5_filtered(
     path: impl AsRef<Path>,
     keep: impl Fn(&str) -> bool,
-) -> Result<Vec<RawRead>> {
+) -> Result<Box<dyn Iterator<Item = Result<RawRead>> + Send>> {
     #[cfg(feature = "pod5-pure")]
     {
-        native::read_pod5_filtered_impl(path.as_ref(), keep)
+        Ok(Box::new(native::iter_pod5_filtered_impl(path.as_ref(), keep)?))
     }
     #[cfg(not(feature = "pod5-pure"))]
     {
@@ -159,14 +161,16 @@ mod native {
         })
     }
 
-    /// Like [`iter_pod5_impl`] but keeps only reads passing `keep`, and decodes
-    /// *only those reads'* signal rows.  The reads table is scanned and filtered
-    /// before the signal table is touched, so rejected reads never trigger an
-    /// svb16 decode.
-    pub(super) fn read_pod5_filtered_impl(
+    /// Like [`iter_pod5_impl`] but keeps only reads passing `keep`.
+    ///
+    /// The reads table is filtered up front (metadata only), then the returned
+    /// [`Pod5Iter`] decodes each kept read's signal **lazily, one at a time**.
+    /// Reads rejected by `keep` never trigger an svb16 decode, and peak memory
+    /// stays proportional to a single read rather than the whole file.
+    pub(super) fn iter_pod5_filtered_impl(
         path: &Path,
         keep: impl Fn(&str) -> bool,
-    ) -> Result<Vec<RawRead>> {
+    ) -> Result<Pod5Iter> {
         let mut file = File::open(path)
             .map_err(|e| Ds3Error::SignalFile(format!("cannot open {:?}: {e}", path)))?;
 
@@ -178,21 +182,20 @@ mod native {
         let mmap = unsafe { MmapOptions::new().map(&file) }
             .map_err(|e| Ds3Error::SignalFile(format!("mmap {:?}: {e}", path)))?;
 
-        // Filter the (cheap) reads table first; only kept reads are decoded.
+        // Filter the (cheap) reads table first; only kept reads will be decoded.
         let kept: Vec<ReadMeta> = load_reads_table(&mmap, &footer)?
             .into_iter()
             .filter(|m| keep(&m.read_id))
             .collect();
-        if kept.is_empty() {
-            return Ok(Vec::new());
-        }
 
         let signal_table = load_signal_table(&mmap, &footer)?;
 
         // mmap/file dropped at end of scope; signal_table owns its Arrow buffers.
-        kept.into_iter()
-            .map(|meta| decode_read(meta, &signal_table))
-            .collect()
+        // Pod5Iter decodes one read per `next()`, keeping peak memory low.
+        Ok(Pod5Iter {
+            reads: kept.into_iter(),
+            signal_table,
+        })
     }
 
     // ─── streaming iterator ───────────────────────────────────────────────────

@@ -20,7 +20,7 @@ use pyrameth_core::{
     },
     io::{
         bam::{BamSearcher, ReadIndexedBam},
-        pod5::read_pod5_filtered,
+        pod5::iter_pod5_filtered,
         slow5::read_slow5,
         RawRead,
     },
@@ -148,11 +148,10 @@ pub fn run(args: ExtractArgs) -> anyhow::Result<()> {
             let mut searcher = BamSearcher::new(&bam_index)?;
             match file_type.as_str() {
                 // Hand the BAM-membership test to the POD5 reader so signal for
-                // reads absent from the BAM is never decompressed.
+                // reads absent from the BAM is never decompressed; the iterator
+                // decodes lazily, one read at a time.
                 "pod5" => process_reads(
-                    read_pod5_filtered(file, |rid| bam_index.contains(rid))?
-                        .into_iter()
-                        .map(|r| -> Ds3Result<RawRead> { Ok(r) }),
+                    iter_pod5_filtered(file, |rid| bam_index.contains(rid))?,
                     &mut searcher,
                     &ext_args,
                     &writer,

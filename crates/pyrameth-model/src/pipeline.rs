@@ -39,7 +39,7 @@ use pyrameth_core::{
     features::{BiLstmFeature, ExtractionArgs, MtmFeature},
     io::{
         bam::{BamSearcher, ReadIndexedBam},
-        pod5::read_pod5_filtered,
+        pod5::iter_pod5_filtered,
         slow5::read_slow5,
         RawRead,
     },
@@ -440,13 +440,10 @@ fn signal_producers(
             for file in files {
                 // For POD5 we hand the BAM-membership test straight to the
                 // reader, so signal for reads absent from the BAM is never
-                // decompressed (mirrors the extract_pod5 reference).
+                // decompressed; the iterator decodes lazily, one read at a time
+                // (keeps peak memory low across the parallel files).
                 let reads: Box<dyn Iterator<Item = Ds3Result<RawRead>>> = match ft.as_str() {
-                    "pod5"  => Box::new(
-                        read_pod5_filtered(file, |rid| bam.contains(rid))?
-                            .into_iter()
-                            .map(|r| -> Ds3Result<RawRead> { Ok(r) }),
-                    ),
+                    "pod5"  => iter_pod5_filtered(file, |rid| bam.contains(rid))?,
                     "slow5" => Box::new(
                         read_slow5(file.clone())?
                             .into_iter()
