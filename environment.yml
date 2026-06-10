@@ -1,0 +1,25 @@
+name: pyrameth
+channels:
+  - bioconda
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python>=3.12
+  - pip
+  - numpy>=1.15.3
+  - statsmodels>=0.9.0
+  - scikit-learn>=0.20.1
+  - scipy
+  - pytorch::pytorch-cuda=11.8  # compatible with pytorch 2.0–2.3.x; adjust for your CUDA version
+  - pytorch::pytorch=2.3.1      # use channel prefix to ensure CUDA variant is selected
+  - pysam
+  - minimap2
+  - mappy
+  - h5py
+  - samtools
+  - pip:
+    - ont-fast5-api
+    - pod5
+    - pyslow5
+    # - pyrameth  # uncomment to install from PyPI instead of source
