@@ -75,10 +75,10 @@ pip install torch==2.3.1 --index-url https://download.pytorch.org/whl/cu118
 
 Currently, the following models are available:
 
-- [human_r1041_4khz_CG.ckpt](model/human_r1041_4khz_CG_epoch7.ckpt): HTE model trained on human **R10.4.1 (4 kHz)** data aligned to CHM13 v2.0, for detecting 5mC at CpG sites.
-- [human_r1041_5khz_CG.ckpt](model/human_r1041_5khz_CG_epoch5.ckpt): HTE model trained on human **R10.4.1 (5 kHz)** data aligned to CHM13 v2.0, for detecting 5mC at CpG sites.
-- [human_r1041_4khz_CG_site.ckpt](model/human_r1041_4khz_CG_site.ckpt): Site-level estimation model trained on human **R10.4.1 (4 kHz)** data aligned to CHM13 v2.0, for aggregating per-read 5mC probabilities to site-level frequency.
-- [human_r1041_5khz_CG_site.ckpt](model/human_r1041_5khz_CG_site.ckpt): Site-level estimation model trained on human **R10.4.1 (5 kHz)** data aligned to CHM13 v2.0, for aggregating per-read 5mC probabilities to site-level frequency.
+- [r1041_4khz_5mC.ckpt](pyrameth/model/r1041_4khz_5mC.ckpt): HTE model trained on human **R10.4.1 (4 kHz)** data aligned to CHM13 v2.0, for detecting 5mC at CpG sites.
+- [r1041_5khz_5mC.ckpt](pyrameth/model/r1041_5khz_5mC.ckpt): HTE model trained on human **R10.4.1 (5 kHz)** data aligned to CHM13 v2.0, for detecting 5mC at CpG sites.
+- [r1041_4khz_5mC_site.ckpt](pyrameth/model/r1041_4khz_5mC_site.ckpt): Site-level estimation model trained on human **R10.4.1 (4 kHz)** data aligned to CHM13 v2.0, for aggregating per-read 5mC probabilities to site-level frequency.
+- [r1041_5khz_5mC_site.ckpt](pyrameth/model/r1041_5khz_5mC_site.ckpt): Site-level estimation model trained on human **R10.4.1 (5 kHz)** data aligned to CHM13 v2.0, for aggregating per-read 5mC probabilities to site-level frequency.
 
 ## Example data
 
@@ -102,7 +102,7 @@ pyrameth call_mods --input_path pod5/ --bam demo.bam --model_path *.ckpt \
 pyrameth call_freq --input_path pod5.CG.call_mods.tsv --result_file pod5.CG.call_mods.frequency.tsv
 
 # 3b. Phase 2 — site-level neural-network frequency estimation (requires site-level model checkpoint)
-pyrameth call_freq --input_path pod5.CG.call_mods.tsv --result_file pod5.CG.aggregate.bed -m human_r1041_4khz_CG_site.ckpt
+pyrameth call_freq --input_path pod5.CG.call_mods.tsv --result_file pod5.CG.aggregate.bed -m r1041_4khz_5mC_site.ckpt
 ```
 
 **POD5/SloW5/BloW5 → ModBAM (MM/ML tags):**
@@ -131,15 +131,15 @@ dorado basecaller dna_r10.4.1_e8.2_400bps_sup@v4.1.0 --device cpu   --emit-moves
 
 ```bash
 # pod5/slow5/blow5 → TSV, GPU
-pyrameth call_mods --input_path pod5/ --bam demo.bam --model_path human.r10.4.CG.ckpt \
+pyrameth call_mods --input_path pod5/ --bam demo.bam --model_path r1041_4khz_5mC.ckpt \
     --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4 --seq_len 21 --signal_len 15 -b 8192
 
 # pod5/slow5/blow5 → ModBAM (MM/ML tags, sorted and indexed)
-pyrameth call_mods_bam --input_path pod5/ --bam demo.bam --model_path human.r10.4.CG.ckpt \
+pyrameth call_mods_bam --input_path pod5/ --bam demo.bam --model_path r1041_4khz_5mC.ckpt \
     --output_bam pod5.CG.mods.bam --nproc 32
 
 # pre-extracted feature TSV → TSV (skip signal reading)
-pyrameth call_mods --input_path pod5s.CG.features.tsv --model_path human.r10.4.CG.ckpt \
+pyrameth call_mods --input_path pod5s.CG.features.tsv --model_path r1041_4khz_5mC.ckpt \
     --result_file pod5s.CG.call_mods.tsv --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
 ```
 
@@ -188,7 +188,7 @@ Default TSV output columns:
 pyrameth call_freq \
     --input_path pod5s.CG.call_mods.tsv \
     --result_file pod5s.CG.aggregate.bed \
-    --aggre_model human_r1041_4khz_CG_site.ckpt \
+    --aggre_model r1041_4khz_5mC_site.ckpt \
     --cov_cf 4 \
     --bin_size 20 \
     --sort
