@@ -1,8 +1,8 @@
 # PyraMeth
 
-## A deep learning tool for DNA methylation detection from modern Oxford Nanopore reads.
+## PyraMeth: a lightweight framework for low-coverage nanopore 5mC methylation quantification.
 
-Supports two model architectures: **modelMTM** (default, Multi-scale Temporal Mixer) and **ModelBiLSTM** (bidirectional LSTM), selectable via `--model_class`.
+PyraMeth is a two-phase framework for accurate CpG methylation calling from Oxford Nanopore R10.4.1 reads, with a particular focus on 5×–10× low-coverage regimes. The read-level phase uses a **Hierarchical Temporal Encoder (HTE)** (~1.48 M parameters) that captures ionic current features across multiple temporal scales. The site-level phase uses a **site-level estimation module** that integrates the distribution of per-read probabilities at a CpG and its local methylation context to estimate methylation frequency without reducing probabilistic evidence to hard read counts.
 
 ## Contents
 
@@ -15,6 +15,7 @@ Supports two model architectures: **modelMTM** (default, Multi-scale Temporal Mi
   - [3. call frequency of modifications](#3-call-frequency-of-modifications)
   - [4. extract features](#4-extract-features)
   - [5. train new models](#5-train-new-models)
+- [Appendix](#Appendix)
 
 ## Installation
 
@@ -37,7 +38,7 @@ PyraMeth is built on [Python3](https://www.python.org/) and [PyTorch](https://py
 
 #### 1. Create an environment
 
-We highly recommend to use a virtual environment for the installation of PyraMeth and its dependencies. A virtual environment can be created and (de)activated as follows by using [conda](https://conda.io/docs/):
+We highly recommend using a virtual environment for the installation of PyraMeth and its dependencies. A virtual environment can be created and (de)activated as follows using [conda](https://conda.io/docs/):
 
 ```bash
 # create (recommended: use environment.yml for exact dependency resolution)
@@ -50,11 +51,11 @@ conda activate pyrameth
 conda deactivate
 ```
 
-The virtual environment can also be created by using [virtualenv](https://github.com/pypa/virtualenv/).
+The virtual environment can also be created using [virtualenv](https://github.com/pypa/virtualenv/).
 
 #### 2. Install PyraMeth
 
-- After creating and activating the environment, download PyraMeth (**latest version**) from github:
+After creating and activating the environment, download PyraMeth (**latest version**) from GitHub:
 
 ```bash
 git clone https://github.com/PengNi/PyraMeth.git
@@ -62,56 +63,67 @@ cd PyraMeth
 pip install -e .
 ```
 
-- [PyTorch](https://pytorch.org/) should be installed to match your CUDA version. See [PyTorch installation guide](https://pytorch.org/get-started/locally/):
+[PyTorch](https://pytorch.org/) should be installed to match your CUDA version. See the [PyTorch installation guide](https://pytorch.org/get-started/locally/):
 
 ```bash
 # example: CUDA 11.8
 conda install pytorch=2.3.1 pytorch-cuda=11.8 -c pytorch -c nvidia
-# or install using pip
+# or via pip
 pip install torch==2.3.1 --index-url https://download.pytorch.org/whl/cu118
 ```
 
 ## Trained models
 
-Currently, we have trained the following models:
+Currently, the following models are available:
 
-- [human_r1041_4khz_CG_epoch7.ckpt](model/human_r1041_4khz_CG_epoch7.ckpt): model trained using human **R10.4.1(4kHz)** data with reference genome chm13v2 for detecting 5mC at CpG sites.
-- [human_r1041_5khz_CG_epoch5.ckpt](model/human_r1041_5khz_CG_epoch5.ckpt): model trained using human **R10.4.1(5kHz)** data with reference genome chm13v2 for detecting 5mC at CpG sites.
-- ~~[plant_r1041_4khz_C_epoch7.ckpt](model/plant_r1041_4khz_C_epoch7.ckpt): model trained using rice **R10.4.1(4kHz)** data for detecting 5mC at CG/CHG/CHH. The use of this model requires the use of parameters `--motifs C --seq_len 21 --signal_len 16`. (Not recommended)~~
-
-- [plant_r1041_5khz_C_epoch4.ckpt](model/plant_r1041_5khz_C_epoch4.ckpt): model trained using rice **R10.4.1(5kHz)** data for detecting 5mC at CG/CHG/CHH. The use of this model requires the use of parameters `--motifs C --seq_len 13 --signal_len 15`. (recommend)
+- [human_r1041_4khz_CG.ckpt](model/human_r1041_4khz_CG_epoch7.ckpt): HTE model trained on human **R10.4.1 (4 kHz)** data aligned to CHM13 v2.0, for detecting 5mC at CpG sites.
+- [human_r1041_5khz_CG.ckpt](model/human_r1041_5khz_CG_epoch5.ckpt): HTE model trained on human **R10.4.1 (5 kHz)** data aligned to CHM13 v2.0, for detecting 5mC at CpG sites.
+- [human_r1041_4khz_CG_site.ckpt](model/human_r1041_4khz_CG_site.ckpt): Site-level estimation model trained on human **R10.4.1 (4 kHz)** data aligned to CHM13 v2.0, for aggregating per-read 5mC probabilities to site-level frequency.
+- [human_r1041_5khz_CG_site.ckpt](model/human_r1041_5khz_CG_site.ckpt): Site-level estimation model trained on human **R10.4.1 (5 kHz)** data aligned to CHM13 v2.0, for aggregating per-read 5mC probabilities to site-level frequency.
 
 ## Example data
 
-Example data, including training data and test data, can be downloaded from ([google drive](https://drive.google.com/drive/folders/1GNkT0a8-jNdNJe1Wx2eI5hJY_Zv9bXqF)). Example data from the human genome HG002.
+Example data (training and test sets) can be downloaded from [Google Drive](https://drive.google.com/drive/folders/1GNkT0a8-jNdNJe1Wx2eI5hJY_Zv9bXqF). The example data are from the human genome HG002.
 
 ## Quick start
 
-To call modifications, the raw fast5 files should be basecalled ([Guppy](https://nanoporetech.com/community)(version <=6.2.1)), and the raw pod5 files should be basecalled ([Dorado](https://github.com/nanoporetech/dorado)). Belows are commands to call 5mC in CG (you can use --motifs to change, for example --motifs CHH):
+Raw POD5 files must be basecalled with [Dorado](https://github.com/nanoporetech/dorado) using the `--emit-moves` flag to retain the move table. Raw FAST5 files must be basecalled with [Guppy](https://nanoporetech.com/community) (version ≤6.2.1).
 
-Demo commands of using Dorado and PyraMeth to call 5mC from POD5/SloW5/BloW5 files:
+**POD5/SloW5/BloW5 → per-read TSV then frequency:**
 
 ```bash
-# 1. dorado basecall using GPU
+# 1. Dorado basecall with move table
 dorado basecaller dna_r10.4.1_e8.2_400bps_hac@v4.1.0 --emit-moves --device cuda:all pod5/ --reference chm13v2.0.fa > demo.bam
-# 2. pyrameth call_mods (MTM model, default)
-pyrameth call_mods --input_path pod5/ --bam demo.bam --model_path *.ckpt --model_class mtm --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4 --seq_len 21 --signal_len 15 -b 8192
+
+# 2. Phase 1 — read-level calling (HTE model)
+pyrameth call_mods --input_path pod5/ --bam demo.bam --model_path *.ckpt \
+    --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4 --seq_len 21 --signal_len 15 -b 8192
+
+# 3a. Phase 2 — count-based frequency (default)
 pyrameth call_freq --input_path pod5.CG.call_mods.tsv --result_file pod5.CG.call_mods.frequency.tsv
-# optional: neural-network refinement via AggrAttRNN (aggregate mode)
-pyrameth call_freq --input_path pod5.CG.call_mods.tsv --result_file pod5.CG.aggregate.bed -m aggre_model.ckpt
+
+# 3b. Phase 2 — site-level neural-network frequency estimation (requires site-level model checkpoint)
+pyrameth call_freq --input_path pod5.CG.call_mods.tsv --result_file pod5.CG.aggregate.bed -m human_r1041_4khz_CG_site.ckpt
 ```
 
-Demo commands of using Guppy and PyraMeth to call 5mC from FAST5 files:
+**POD5/SloW5/BloW5 → ModBAM (MM/ML tags):**
 
 ```bash
-# Higher versions of Guppy no longer support the output format fast5
-# Download and unzip the example data and pre-trained models.
-# 1. guppy basecall using GPU
+pyrameth call_mods_bam --input_path pod5/ --bam demo.bam --model_path *.ckpt \
+    --output_bam pod5.CG.mods.bam --nproc 32
+```
+
+**FAST5 → per-read TSV then frequency:**
+
+```bash
+# 1. Guppy basecall
 guppy_basecaller -i multi_fast5s/ -r -s fast5s_guppy/ --config dna_r10.4.1_e8.2_400bps_hac_prom.cfg --device CUDA:0 --fast5_out
-# multi_fast5s/ is the folder where hg002.r10.4.test.fast5 is stored
-# fast5s_guppy/ is the output folder
-# 2. pyrameth call_mods
-pyrameth call_mods --input_path fast5s_guppy/ --model_path *.ckpt --model_class mtm --result_file fast5s.CG.call_mods.tsv --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
+
+# 2. Phase 1 — read-level calling
+pyrameth call_mods --input_path fast5s_guppy/ --model_path *.ckpt \
+    --result_file fast5s.CG.call_mods.tsv --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
+
+# 3. Phase 2 — frequency
 pyrameth call_freq --input_path fast5s.CG.call_mods.tsv --result_file fast5s.CG.call_mods.frequency.tsv
 ```
 
@@ -119,177 +131,146 @@ pyrameth call_freq --input_path fast5s.CG.call_mods.tsv --result_file fast5s.CG.
 
 #### 1. Basecall
 
-If raw file is pod5, before run deepsignal, the raw reads should be basecalled ([Dorado](https://github.com/nanoporetech/dorado)).
-
-For the example data:
+For POD5 input, basecall with [Dorado](https://github.com/nanoporetech/dorado). The `--emit-moves` flag is required for signal-to-base alignment:
 
 ```bash
-# 1. basecall using GPU
-dorado  basecaller dna_r10.4.1_e8.2_400bps_hac@v4.1.0 --device cuda:0 --emit-moves  pod5/ --reference reference.fa  > example.bam
-# or using CPU
-dorado  basecaller dna_r10.4.1_e8.2_400bps_hac@v4.1.0 --device cpu --emit-moves  pod5/ --reference reference.fa  > example.bam
+# GPU
+dorado basecaller dna_r10.4.1_e8.2_400bps_sup@v4.1.0 --device cuda:0 --emit-moves pod5/ --reference reference.fa > example.bam
+# CPU
+dorado basecaller dna_r10.4.1_e8.2_400bps_sup@v4.1.0 --device cpu   --emit-moves pod5/ --reference reference.fa > example.bam
 ```
 
-If the raw reads is in FAST5 format, before running deepsignal, the raw reads should be basecalled ([Guppy](https://nanoporetech.com/community)(version <=6.2.1)).
-
-For the example data:
+For FAST5 input, basecall with [Guppy](https://nanoporetech.com/community) (version ≤6.2.1):
 
 ```bash
-# 1. basecall using GPU
+# GPU
 guppy_basecaller -i multi_fast5s/ -r -s fast5s_guppy/ --config dna_r10.4.1_e8.2_400bps_hac_prom.cfg --device CUDA:0 --fast5_out
-# or using CPU
+# CPU
 guppy_basecaller -i multi_fast5s/ -r -s fast5s_guppy/ --config dna_r10.4.1_e8.2_400bps_hac_prom.cfg --fast5_out
 ```
 
 #### 2. call modifications
 
-To call modifications, either the extracted-feature file or **the raw pod5 files (recommended)** can be used as input.
-
-For the example data:
+`call_mods` accepts either raw signal files (POD5/SloW5/BloW5/FAST5) or a pre-extracted feature TSV as input and writes a per-read TSV. `call_mods_bam` is an alternative that writes a ModBAM file with MM/ML tags directly.
 
 ```bash
-# call 5mCpGs for instance
+# pod5/slow5/blow5 → TSV, GPU
+pyrameth call_mods --input_path pod5/ --bam demo.bam --model_path human.r10.4.CG.ckpt \
+    --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4 --seq_len 21 --signal_len 15 -b 8192
 
-# extracted-feature TSV file as input (MTM model, default)
-pyrameth call_mods --input_path pod5s.CG.features.tsv --model_path human.r10.4.CG.ckpt --model_class mtm --result_file pod5s.CG.call_mods.tsv --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
+# pod5/slow5/blow5 → ModBAM (MM/ML tags, sorted and indexed)
+pyrameth call_mods_bam --input_path pod5/ --bam demo.bam --model_path human.r10.4.CG.ckpt \
+    --output_bam pod5.CG.mods.bam --nproc 32
 
-# pod5/slow5/blow5 files as input, MTM model (default), use GPU
-pyrameth call_mods --input_path pod5/ --bam demo.bam --model_path human.r10.4.CG.ckpt --model_class mtm --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4 --seq_len 21 --signal_len 15 -b 8192
+# fast5 → TSV
+pyrameth call_mods --input_path fast5s_guppy --model_path human.r10.4.CG.ckpt \
+    --result_file fast5s.CG.call_mods.tsv --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
 
-# pod5/slow5/blow5 files as input, BiLSTM model
-pyrameth call_mods --input_path pod5/ --bam demo.bam --model_path human.r10.4.CG.bilstm.ckpt --model_class bilstm --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4 --seq_len 21 --signal_len 15 -b 8192
-
-# fast5 files as input, use GPU
-pyrameth call_mods --input_path fast5s_guppy --model_path human.r10.4.CG.ckpt --model_class mtm --result_file fast5s.CG.call_mods.tsv --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
+# pre-extracted feature TSV → TSV (skip signal reading)
+pyrameth call_mods --input_path pod5s.CG.features.tsv --model_path human.r10.4.CG.ckpt \
+    --result_file pod5s.CG.call_mods.tsv --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
 ```
 
-The modification_call file is a tab-delimited text file in the following format:
+The per-read modification call file is a tab-delimited text file with the following columns:
 
-- **chrom**: the chromosome name
+- **chrom**: chromosome name
 - **pos**: 0-based position of the targeted base in the chromosome
-- **strand**: +/-, the aligned strand of the read to the reference
-- **pos_in_strand**: 0-based position of the targeted base in the aligned strand of the chromosome
-- **readname**: the read name
+- **strand**: +/−, aligned strand of the read to the reference
+- **pos_in_strand**: 0-based position in the aligned strand
+- **readname**: read name
 - **read_strand**: t/c, template or complement
-- **prob_0**: [0, 1], the probability of the targeted base predicted as 0 (unmethylated)
-- **prob_1**: [0, 1], the probability of the targeted base predicted as 1 (methylated)
+- **prob_0**: [0, 1], probability of unmethylated
+- **prob_1**: [0, 1], probability of methylated
 - **called_label**: 0/1, unmethylated/methylated
-- **k_mer**: the kmer around the targeted base
+- **k_mer**: sequence context around the targeted base
 
 #### 3. call frequency of modifications
 
 `call_freq` supports two modes controlled by whether `--aggre_model` is provided:
 
-**Count mode** (default) — pure count-based aggregation:
+**Count mode** (default) — count-based aggregation:
 
 ```bash
-# output in TSV format
+# TSV output
 pyrameth call_freq --input_path pod5s.CG.call_mods.tsv --result_file pod5s.CG.call_mods.frequency.tsv
-# output in bedMethyl format
+# bedMethyl output
 pyrameth call_freq --input_path pod5s.CG.call_mods.tsv --result_file pod5s.CG.call_mods.frequency.bed --bed
-# sort the results
+# sorted bedMethyl
 pyrameth call_freq --input_path pod5s.CG.call_mods.tsv --result_file pod5s.CG.call_mods.frequency.bed --bed --sort
 ```
 
-The default TSV output format:
+Default TSV output columns:
 
-- **chrom**: the chromosome name
-- **pos**: 0-based position of the targeted base in the chromosome
-- **strand**: +/-, the aligned strand of the read to the reference
-- **pos_in_strand**: 0-based position of the targeted base in the aligned strand of the chromosome
-- **prob_0_sum**: sum of the probabilities of the targeted base predicted as 0 (unmethylated)
-- **prob_1_sum**: sum of the probabilities of the targeted base predicted as 1 (methylated)
-- **count_modified**: number of reads in which the targeted base counted as modified
-- **count_unmodified**: number of reads in which the targeted base counted as unmodified
-- **coverage**: number of reads aligned to the targeted base
-- **modification_frequency**: modification frequency
-- **k_mer**: the kmer around the targeted base
+- **chrom**, **pos**, **strand**, **pos_in_strand**
+- **prob_0_sum**: sum of unmethylated probabilities across reads
+- **prob_1_sum**: sum of methylated probabilities across reads
+- **count_modified**: reads called as modified
+- **count_unmodified**: reads called as unmodified
+- **coverage**: total aligned reads at this site
+- **modification_frequency**: methylation frequency
+- **k_mer**: sequence context
 
-**Aggregate mode** (`--aggre_model`) — neural-network refinement via **AggrAttRNN**, always outputs bedMethyl:
+**Aggregate mode** (`--aggre_model`) — site-level neural-network frequency estimation, always outputs bedMethyl:
 
 ```bash
 pyrameth call_freq \
-  --input_path pod5s.CG.call_mods.tsv \
-  --result_file pod5s.CG.aggregate.bed \
-  --aggre_model aggre_model.ckpt \
-  --cov_cf 4 \
-  --bin_size 20 \
-  --sort
+    --input_path pod5s.CG.call_mods.tsv \
+    --result_file pod5s.CG.aggregate.bed \
+    --aggre_model human_r1041_4khz_CG_site.ckpt \
+    --cov_cf 4 \
+    --bin_size 20 \
+    --sort
 ```
 
 Aggregate-mode parameters:
-- **--aggre_model / -m**: AggrAttRNN model checkpoint (.ckpt)
+- **--aggre_model / -m**: site-level estimation model checkpoint (.ckpt)
 - **--cov_cf**: minimum read coverage per site (default: 4)
-- **--bin_size**: histogram bin count for the probability distribution (default: 20)
+- **--bin_size**: histogram bin count for the per-read probability distribution (default: 20)
 
 #### 4. extract features
 
-Features of targeted sites can be extracted for training or testing.
-
-For the example data, pyrameth extracts 21-mer-seq and 21\*15-signal features of each CpG motif in reads by default.:
+Feature extraction from signal files, primarily used for training. By default, PyraMeth extracts 21-mer sequence and 21×15-signal features at each CpG motif:
 
 ```bash
-pyrameth extract -i pod5/ --bam example.bam --reference_path chm13v2.0.fa -o pod5.CG.features.tsv --nproc 30 --motifs CG &
+pyrameth extract -i pod5/ --bam example.bam --reference_path chm13v2.0.fa \
+    -o pod5.CG.features.tsv --nproc 30 --motifs CG
 
-pyrameth extract -i fast5s_guppy --reference_path chm13v2.0.fa -o fast5s.CG.features.tsv --nproc 30 --motifs CG &
+pyrameth extract -i fast5s_guppy --reference_path chm13v2.0.fa \
+    -o fast5s.CG.features.tsv --nproc 30 --motifs CG
 ```
 
-The extracted_features file is a tab-delimited text file in the following format:
+Extracted feature file columns:
 
-- **chrom**: the chromosome name
-- **pos**: 0-based position of the targeted base in the chromosome
-- **strand**: +/-, the aligned strand of the read to the reference
-- **pos_in_strand**: 0-based position of the targeted base in the aligned strand of the chromosome
-- **readname**: the read name
-- **read_strand**: t/c, template or complement
-- **k_mer**: the sequence around the targeted base
-- **signal_means**: signal means of each base in the kmer
-- **signal_stds**: signal stds of each base in the kmer
-- **signal_lens**: lens of each base in the kmer
-- **raw_signals**: signal values for each base of the kmer, splited by ';'
-- **methy_label**: 0/1, the label of the targeted base, for training
+- **chrom**, **pos**, **strand**, **pos_in_strand**, **readname**, **read_strand**
+- **k_mer**: sequence context around the targeted base
+- **signal_means**: per-base signal means in the k-mer
+- **signal_stds**: per-base signal standard deviations
+- **signal_lens**: per-base signal lengths
+- **raw_signals**: raw signal values per base, separated by ';'
+- **methy_label**: 0/1 ground-truth label (for training)
 
 #### 5. train new models
 
-A new model can be trained as follows:
-
 ```bash
-# need to split training samples to two independent datasets for training and validating
-# please use pyrameth train -h/--help for more details
-pyrameth train --train_file /path/to/train/file --valid_file /path/to/valid/file --model_dir /dir/to/save/the/new/model
+# requires two independent datasets for training and validation
+# use pyrameth train -h for full options
+pyrameth train --train_file /path/to/train/file --valid_file /path/to/valid/file \
+    --model_dir /dir/to/save/the/new/model
 ```
-
-## Result
-
-The following table shows the results of 5mCpG calling from publicly avaiable HG002 (R10.4.1) data ([ONT Open Datasets](https://labs.epi2me.io/askenazi-kit14-2022-12/)). The Dorado version for comparison is 0.3.4 and the model version is dna_r10.4.1_e8.2_400bps_sup@v4.1.0. The following table shows the correlations with resutls of WGBS:
-
-|   method   | pearson | rsquare | spearman |  RMSE  | mean_coverage |
-| :--------: | :-----: | :-----: | :------: | :----: | :-----------: |
-| deepsignal | 0.9307  | 0.8662  |  0.8673  | 0.1413 |    4.5607     |
-|   dorado   | 0.9229  | 0.8518  |  0.8687  | 0.1465 |    4.2188     |
-
-The following table shows the read-level performance：
-
-|   method   |   TP    |   FN   |   TN    |   FP   | accuracy | recall | specificity | precision |
-| :--------: | :-----: | :----: | :-----: | :----: | :------: | :----: | :---------: | :-------: |
-| deepsignal | 97094.4 | 2905.6 | 98097.0 | 1903.0 |  0.9760  | 0.9709 |   0.9810    |  0.9808   |
-|   dorado   | 93991.4 | 6008.6 | 99265.8 | 734.2  |  0.9663  | 0.9399 |   0.9927    |  0.9922   |
 
 ## Appendix
 
 #### For the VBZ compression issue
 
-Please try adding ont-vbz-hdf-plugin to your environment as follows when all fast5s failed in `tombo resquiggle` and/or `pyrameth call_mods`. Normally it will work after setting `HDF5_PLUGIN_PATH`:
+Please try adding ont-vbz-hdf-plugin to your environment when all fast5s fail in `pyrameth call_mods`. Normally it will work after setting `HDF5_PLUGIN_PATH`:
 
 ```shell
-# download ont-vbz-hdf-plugin-1.0.1-Linux-x86_64.tar.gz (or newer version) and set HDF5_PLUGIN_PATH
 # https://github.com/nanoporetech/vbz_compression/releases
 wget https://github.com/nanoporetech/vbz_compression/releases/download/v1.0.1/ont-vbz-hdf-plugin-1.0.1-Linux-x86_64.tar.gz
 tar zxvf ont-vbz-hdf-plugin-1.0.1-Linux-x86_64.tar.gz
-export HDF5_PLUGIN_PATH=/abslolute/path/to/ont-vbz-hdf-plugin-1.0.1-Linux/usr/local/hdf5/lib/plugin
+export HDF5_PLUGIN_PATH=/absolute/path/to/ont-vbz-hdf-plugin-1.0.1-Linux/usr/local/hdf5/lib/plugin
 ```
 
 ## Todo
 
 - [ ] add tqdm for progress bar
-- [ ] support data output format: bam
