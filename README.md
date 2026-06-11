@@ -57,7 +57,7 @@ The virtual environment can also be created using [virtualenv](https://github.co
 After creating and activating the environment, download PyraMeth (**latest version**) from GitHub:
 
 ```bash
-git clone https://github.com/PengNi/PyraMeth.git
+git clone https://github.com/YifuXiaoLoveWorld/PyraMeth.git
 cd PyraMeth
 pip install -e .
 ```
@@ -96,7 +96,7 @@ dorado basecaller dna_r10.4.1_e8.2_400bps_hac@v4.1.0 --emit-moves --device cuda:
 
 # 2. Phase 1 — read-level calling (HTE model)
 pyrameth call_mods --input_path pod5/ --bam demo.bam --model_path *.ckpt \
-    --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4 --seq_len 21 --signal_len 15 -b 8192
+    --result_file pod5.CG.call_mods.tsv --nproc 32 --seq_len 21 --signal_len 15 -b 800
 
 # 3a. Phase 2 — count-based frequency (default)
 pyrameth call_freq --input_path pod5.CG.call_mods.tsv --result_file pod5.CG.call_mods.frequency.tsv
@@ -132,7 +132,7 @@ dorado basecaller dna_r10.4.1_e8.2_400bps_sup@v4.1.0 --device cpu   --emit-moves
 ```bash
 # pod5/slow5/blow5 → TSV, GPU
 pyrameth call_mods --input_path pod5/ --bam demo.bam --model_path r1041_4khz_5mC.ckpt \
-    --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4 --seq_len 21 --signal_len 15 -b 8192
+    --result_file pod5.CG.call_mods.tsv --nproc 32 --seq_len 21 --signal_len 15 -b 800
 
 # pod5/slow5/blow5 → ModBAM (MM/ML tags, sorted and indexed)
 pyrameth call_mods_bam --input_path pod5/ --bam demo.bam --model_path r1041_4khz_5mC.ckpt \
@@ -140,7 +140,7 @@ pyrameth call_mods_bam --input_path pod5/ --bam demo.bam --model_path r1041_4khz
 
 # pre-extracted feature TSV → TSV (skip signal reading)
 pyrameth call_mods --input_path pod5s.CG.features.tsv --model_path r1041_4khz_5mC.ckpt \
-    --result_file pod5s.CG.call_mods.tsv --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
+    --result_file pod5s.CG.call_mods.tsv --motifs CG --nproc 32 -b 800
 ```
 
 The per-read modification call file is a tab-delimited text file with the following columns:
