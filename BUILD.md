@@ -34,28 +34,25 @@ Without that feature the binary exits with a clear error message.
 
 ---
 
-## Step 1 — Export model to TorchScript
+## Available models
 
-```bash
-cd e:/code/pyrameth-rs
+Checkpoints live in `model/`.  Per-read **call** models (`*_5mC`) are used by
+`call-mods`; site-level **aggregation** models (`*_5mC_site`) are used by
+`call-freq --aggre-model` for neural-network frequency refinement.
 
-# modelMTM (default, recommended)
-python scripts/export_torchscript.py \
-    --model_path  ../model/human_r1041_5khz_CG_epoch5.ckpt \
-    --output_path ../model/human_r1041_5khz_CG_epoch5.pt   \
-    --model_class mtm \
-    --seq_len 21 --signal_len 15
+| Model file | Chemistry | Sample rate | Modification | Stage |
+|------------|-----------|-------------|--------------|-------|
+| `r1041_4khz_5mC.ckpt`      | R10.4.1 | 4 kHz | 5mC | call-mods (per-read) |
+| `r1041_5khz_5mC.ckpt`      | R10.4.1 | 5 kHz | 5mC | call-mods (per-read) |
+| `r1041_4khz_5mC_site.ckpt` | R10.4.1 | 4 kHz | 5mC | call-freq (site aggregation) |
+| `r1041_5khz_5mC_site.ckpt` | R10.4.1 | 5 kHz | 5mC | call-freq (site aggregation) |
 
-# ModelBiLSTM
-python scripts/export_torchscript.py \
-    --model_path  ../model/plant_r1041_5khz_C_epoch4.ckpt \
-    --output_path ../model/plant_r1041_5khz_C_epoch4.pt  \
-    --model_class bilstm
-```
+Each `.ckpt` is exported to a TorchScript `.pt` before use — see
+[Exporting models to TorchScript](#exporting-models-to-torchscript).
 
 ---
 
-## Step 2 — Build
+## Step 1 — Build
 
 ```bash
 cd e:/code/pyrameth-rs
@@ -82,21 +79,20 @@ The binary appears at `target/release/pyrameth` (Linux/macOS) or
 
 ---
 
-## Step 3 — Usage
+## Step 2 — Usage
 
 ### call-mods (methylation inference)
 ```bash
 ./target/release/pyrameth call-mods \
     --input-path /data/pod5/ \
     --bam        /data/aligned.bam \
-    --model-path ../model/human_r1041_5khz_CG_epoch5.pt \
-    --model-class mtm \
+    --model-path model/r1041_5khz_5mC.pt \
     --result-file /data/mods.tsv \
     --seq-len 21 --signal-len 15 \
     --batch-size 512 --nproc 8
 ```
 
-### call-freq (genome-level frequency)
+### call-freq (site-level frequency)
 ```bash
 # Count-based TSV
 ./target/release/pyrameth call-freq \
@@ -110,18 +106,12 @@ The binary appears at `target/release/pyrameth` (Linux/macOS) or
     --result-file /data/freq.bed \
     --bed --sort
 
-# AggrAttRNN neural-network refinement (always writes bedMethyl)
-# Step 1: export AggrAttRNN model
-python scripts/export_torchscript.py \
-    --model_path  ../model/aggr_model.ckpt \
-    --output_path ../model/aggr_model.pt   \
-    --model_class aggr
-
-# Step 2: run refined frequency calling
+# site-level neural-network frequency estimation (always writes bedMethyl)
+# uses the exported site model (see "Exporting models to TorchScript" below)
 ./target/release/pyrameth call-freq \
     --input-path  /data/mods.tsv \
     --result-file /data/freq_aggr.bed \
-    --aggre-model ../model/aggr_model.pt \
+    --aggre-model model/r1041_5khz_5mC_site.pt \
     --cov-cf 4 --bin-size 20 --sort
 ```
 
@@ -158,10 +148,34 @@ output** to Python for the following operations:
 
 ---
 
+## Exporting models to TorchScript
+
+The Rust binary loads TorchScript `.pt` files.  Convert each `.ckpt` from the
+[Available models](#available-models) table with `scripts/export_torchscript.py`
+(requires `pip install torch`).
+
+```bash
+cd e:/code/pyrameth-rs
+
+# Per-read call model (used by call-mods)
+python scripts/export_torchscript.py \
+    --model_path  model/r1041_5khz_5mC.ckpt \
+    --output_path model/r1041_5khz_5mC.pt   \
+    --seq_len 21 --signal_len 15
+
+# Site-level aggregation model (used by call-freq --aggre-model)
+python scripts/export_torchscript.py \
+    --model_path  model/r1041_5khz_5mC_site.ckpt \
+    --output_path model/r1041_5khz_5mC_site.pt   \
+    --model_class aggr
+```
+
+---
+
 ## Roadmap
 
 - [ ] Native POD5 reading via `pod5` crate (eliminates Python subprocess)
 - [ ] Native Slow5 reading via `slow5` crate
-- [ ] AggrAttRNN frequency refinement (call_freq --aggre_model)
+- [ ] site-level neural-network frequency estimation (call_freq --aggre_model)
 - [ ] gzip output support for large result files
 - [ ] Benchmarking harness vs Python baseline
