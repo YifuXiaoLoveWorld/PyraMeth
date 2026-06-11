@@ -23,8 +23,7 @@ PyraMeth is built on [Python3](https://www.python.org/) and [PyTorch](https://py
 
 - Prerequisites:\
    [Python3.\*](https://www.python.org/) (version >=3.12) \
-   [Dorado](https://github.com/nanoporetech/dorado)\
-   [Guppy](https://nanoporetech.com/community) (for FAST5 input)
+   [Dorado](https://github.com/nanoporetech/dorado)
 - Dependencies: \
    [numpy](http://www.numpy.org/) \
    [h5py](https://github.com/h5py/h5py) \
@@ -87,7 +86,7 @@ Example data (training and test sets) can be downloaded from [Google Drive](http
 
 ## Quick start
 
-Raw POD5 files must be basecalled with [Dorado](https://github.com/nanoporetech/dorado) using the `--emit-moves` flag to retain the move table. Raw FAST5 files must be basecalled with [Guppy](https://nanoporetech.com/community) (version ≤6.2.1).
+Raw POD5 files must be basecalled with [Dorado](https://github.com/nanoporetech/dorado) using the `--emit-moves` flag to retain the move table.
 
 **POD5/SloW5/BloW5 → per-read TSV then frequency:**
 
@@ -113,20 +112,6 @@ pyrameth call_mods_bam --input_path pod5/ --bam demo.bam --model_path *.ckpt \
     --output_bam pod5.CG.mods.bam --nproc 32
 ```
 
-**FAST5 → per-read TSV then frequency:**
-
-```bash
-# 1. Guppy basecall
-guppy_basecaller -i multi_fast5s/ -r -s fast5s_guppy/ --config dna_r10.4.1_e8.2_400bps_hac_prom.cfg --device CUDA:0 --fast5_out
-
-# 2. Phase 1 — read-level calling
-pyrameth call_mods --input_path fast5s_guppy/ --model_path *.ckpt \
-    --result_file fast5s.CG.call_mods.tsv --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
-
-# 3. Phase 2 — frequency
-pyrameth call_freq --input_path fast5s.CG.call_mods.tsv --result_file fast5s.CG.call_mods.frequency.tsv
-```
-
 ## Usage
 
 #### 1. Basecall
@@ -140,18 +125,9 @@ dorado basecaller dna_r10.4.1_e8.2_400bps_sup@v4.1.0 --device cuda:0 --emit-move
 dorado basecaller dna_r10.4.1_e8.2_400bps_sup@v4.1.0 --device cpu   --emit-moves pod5/ --reference reference.fa > example.bam
 ```
 
-For FAST5 input, basecall with [Guppy](https://nanoporetech.com/community) (version ≤6.2.1):
-
-```bash
-# GPU
-guppy_basecaller -i multi_fast5s/ -r -s fast5s_guppy/ --config dna_r10.4.1_e8.2_400bps_hac_prom.cfg --device CUDA:0 --fast5_out
-# CPU
-guppy_basecaller -i multi_fast5s/ -r -s fast5s_guppy/ --config dna_r10.4.1_e8.2_400bps_hac_prom.cfg --fast5_out
-```
-
 #### 2. call modifications
 
-`call_mods` accepts either raw signal files (POD5/SloW5/BloW5/FAST5) or a pre-extracted feature TSV as input and writes a per-read TSV. `call_mods_bam` is an alternative that writes a ModBAM file with MM/ML tags directly.
+`call_mods` accepts either raw signal files (POD5/SloW5/BloW5) or a pre-extracted feature TSV as input and writes a per-read TSV. `call_mods_bam` is an alternative that writes a ModBAM file with MM/ML tags directly.
 
 ```bash
 # pod5/slow5/blow5 → TSV, GPU
@@ -161,10 +137,6 @@ pyrameth call_mods --input_path pod5/ --bam demo.bam --model_path human.r10.4.CG
 # pod5/slow5/blow5 → ModBAM (MM/ML tags, sorted and indexed)
 pyrameth call_mods_bam --input_path pod5/ --bam demo.bam --model_path human.r10.4.CG.ckpt \
     --output_bam pod5.CG.mods.bam --nproc 32
-
-# fast5 → TSV
-pyrameth call_mods --input_path fast5s_guppy --model_path human.r10.4.CG.ckpt \
-    --result_file fast5s.CG.call_mods.tsv --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
 
 # pre-extracted feature TSV → TSV (skip signal reading)
 pyrameth call_mods --input_path pod5s.CG.features.tsv --model_path human.r10.4.CG.ckpt \
@@ -234,9 +206,6 @@ Feature extraction from signal files, primarily used for training. By default, P
 ```bash
 pyrameth extract -i pod5/ --bam example.bam --reference_path chm13v2.0.fa \
     -o pod5.CG.features.tsv --nproc 30 --motifs CG
-
-pyrameth extract -i fast5s_guppy --reference_path chm13v2.0.fa \
-    -o fast5s.CG.features.tsv --nproc 30 --motifs CG
 ```
 
 Extracted feature file columns:
@@ -256,19 +225,6 @@ Extracted feature file columns:
 # use pyrameth train -h for full options
 pyrameth train --train_file /path/to/train/file --valid_file /path/to/valid/file \
     --model_dir /dir/to/save/the/new/model
-```
-
-## Appendix
-
-#### For the VBZ compression issue
-
-Please try adding ont-vbz-hdf-plugin to your environment when all fast5s fail in `pyrameth call_mods`. Normally it will work after setting `HDF5_PLUGIN_PATH`:
-
-```shell
-# https://github.com/nanoporetech/vbz_compression/releases
-wget https://github.com/nanoporetech/vbz_compression/releases/download/v1.0.1/ont-vbz-hdf-plugin-1.0.1-Linux-x86_64.tar.gz
-tar zxvf ont-vbz-hdf-plugin-1.0.1-Linux-x86_64.tar.gz
-export HDF5_PLUGIN_PATH=/absolute/path/to/ont-vbz-hdf-plugin-1.0.1-Linux/usr/local/hdf5/lib/plugin
 ```
 
 ## Todo
