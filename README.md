@@ -1,4 +1,12 @@
-# pyrameth-rs — Build & Setup Guide
+# pyrameth-rs
+
+A Rust nanopore DNA methylation caller.  It reads raw signal from POD5 or
+Slow5/Blow5 together with an aligned BAM, extracts per-read features, and runs
+TorchScript models (via tch-rs / LibTorch) to call 5mC methylation and
+aggregate it to site-level frequencies.
+
+**Subcommands**: `call-mods` (per-read methylation inference) ·
+`call-freq` (site-level frequency) · `extract` (feature extraction to TSV).
 
 ## Prerequisites
 

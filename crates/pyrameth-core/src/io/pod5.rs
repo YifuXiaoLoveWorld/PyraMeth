@@ -45,7 +45,7 @@ pub fn read_pod5(path: impl AsRef<Path>) -> Result<Vec<RawRead>> {
         let _ = path;
         Err(Ds3Error::SignalFile(
             "POD5 reading is disabled. Rebuild with `--features pod5-pure`. \
-             See BUILD.md for instructions."
+             See README.md for instructions."
                 .into(),
         ))
     }
@@ -70,7 +70,7 @@ pub fn iter_pod5(
         let _ = path;
         Err(Ds3Error::SignalFile(
             "POD5 reading is disabled. Rebuild with `--features pod5-pure`. \
-             See BUILD.md for instructions."
+             See README.md for instructions."
                 .into(),
         ))
     }
@@ -99,7 +99,7 @@ pub fn iter_pod5_filtered(
         let _ = (path, keep);
         Err(Ds3Error::SignalFile(
             "POD5 reading is disabled. Rebuild with `--features pod5-pure`. \
-             See BUILD.md for instructions."
+             See README.md for instructions."
                 .into(),
         ))
     }
