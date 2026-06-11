@@ -63,7 +63,7 @@ Each `.ckpt` is exported to a TorchScript `.pt` before use — see
 ## Step 1 — Build
 
 ```bash
-cd e:/code/pyrameth-rs
+cd pyrameth-rs
 
 # Debug build (fast compile); Slow5/Blow5 native, POD5 disabled
 cargo build
@@ -163,7 +163,7 @@ The Rust binary loads TorchScript `.pt` files.  Convert each `.ckpt` from the
 (requires `pip install torch`).
 
 ```bash
-cd e:/code/pyrameth-rs
+cd pyrameth-rs
 
 # Per-read call model (used by call-mods)
 python scripts/export_torchscript.py \
