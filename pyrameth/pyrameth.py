@@ -32,24 +32,7 @@ def main_call_mods_bam(args):
 def main_call_mods(args):
     from .call_modifications import inference_ultra
 
-    # from .call_modifications_transfer import call_mods as call_mods_transfer
-    # from .call_modifications_domain import call_mods as call_mods_domain
-    # from .call_modifications_cg import call_mods as call_mods_cg
-    # from .call_modifications_cg_combine import call_mods as call_mods_cg_combine
-    # from .call_modifications_freq import call_mods as call_mods_freq
-
     display_args(args)
-    # if args.transfer:
-    #     print("transfer")
-    #     # call_mods_transfer(args)
-    # elif args.domain:
-    #     print("domain")
-    #     # call_mods_domain(args)
-    # elif args.freq:
-    #     print("freq")
-    #     # call_mods_freq(args)
-    # else:
-    #     call_mods(args)
     inference_ultra(args)
 
 def main_call_freq(args):
@@ -59,38 +42,10 @@ def main_call_freq(args):
     call_mods_frequency_to_file(args)
 
 
-def main_call_read_calib(args):
-    from .call_mods_freq import call_read_calib_to_file
-
-    display_args(args)
-    call_read_calib_to_file(args)
-
-
 def main_train(args):
-    from .train import (
-        train,
-        # train_transfer,
-        # train_domain,
-        # train_fusion,
-        # train_cnn,
-        # train_cg,
-        # train_combine,
-        # trainFreq,
-        # trainFreq_mp,
-    )
+    from .train import train
 
     display_args(args)
-    # if args.transfer:
-    #     print("transfer")
-    #     train_transfer(args)
-    # elif args.domain:
-    #     print("domain")
-    #     train_domain(args)
-    # elif args.freq:
-    #     print("freq")
-    #     trainFreq_mp(args)
-    # else:
-    #     train(args)
     train(args)
 
 
@@ -150,12 +105,6 @@ def main():
     )
     sub_call_freq = subparsers.add_parser(
         "call_freq", description="call frequency of modifications at genome level"
-    )
-    sub_call_read_calib = subparsers.add_parser(
-        "call_read_calib",
-        description="Phase 1.5: ReadCalibRNN read-level calibration. "
-                    "Reads per-read call TSV from call_mods and writes a calibrated TSV "
-                    "with updated prob_0/prob_1/called_label using intra-read CpG context.",
     )
     sub_extract = subparsers.add_parser(
         "extract",
@@ -724,33 +673,6 @@ def main():
 
     sub_call_freq.set_defaults(func=main_call_freq)
 
-    # sub_call_read_calib ====================================================================
-    scrc_in = sub_call_read_calib.add_argument_group("INPUT")
-    scrc_in.add_argument("--input_path", "-i", action="append", type=str, required=True,
-                         help="per-read call TSV file(s) or directory from call_mods. "
-                              "Can be used multiple times.")
-    scrc_in.add_argument("--file_uid", type=str, default=None,
-                         help="unique string shared by all target files in a directory")
-
-    scrc_out = sub_call_read_calib.add_argument_group("OUTPUT")
-    scrc_out.add_argument("--result_file", "-o", type=str, required=True,
-                          help="output calibrated TSV file path")
-
-    scrc_model = sub_call_read_calib.add_argument_group("MODEL")
-    scrc_model.add_argument("--read_calib_model", "-m", type=str, required=True,
-                            help="ReadCalibRNN checkpoint (.ckpt)")
-    scrc_model.add_argument("--read_calib_hidden", type=int, default=32,
-                            help="hidden size, must match trained model, default 32")
-    scrc_model.add_argument("--read_calib_seq_len", type=int, default=11,
-                            help="window size K, must match trained model, default 11")
-    scrc_model.add_argument("--read_calib_model_type", type=str, default="attbigru",
-                            choices=["attbigru", "attbilstm"],
-                            help="model architecture, default attbigru")
-    scrc_model.add_argument("--batch_size", type=int, default=4096,
-                            help="inference batch size, default 4096")
-
-    sub_call_read_calib.set_defaults(func=main_call_read_calib)
-
     # sub_extract ============================================================================
     se_input = sub_extract.add_argument_group("INPUT")
     se_input.add_argument(
@@ -1116,21 +1038,6 @@ def main():
     #                        help='random seed')
     # else
     st_train.add_argument("--tmpdir", type=str, default="/tmp", required=False)
-    st_train.add_argument(
-        "--transfer",
-        action="store_true",
-        default=False,
-        help="weather use transfer learning",
-    )
-    st_train.add_argument(
-        "--domain",
-        action="store_true",
-        default=False,
-        help="weather use domain attribute",
-    )
-    st_train.add_argument(
-        "--freq", action="store_true", default=False, help="weather use freq attribute"
-    )
 
     sub_train.set_defaults(func=main_train)
 
@@ -1302,11 +1209,10 @@ def main():
         "--model_class",
         type=str,
         default="bilstm",
-        choices=["bilstm", "mtm", "aggregate", "read_calib"],
+        choices=["bilstm", "mtm", "aggregate"],
         required=False,
         help="model class: 'bilstm' (ModelBiLSTM), 'mtm' (modelMTM), "
-             "'aggregate' (site-level AggrAttRNN), "
-             "'read_calib' (read-level ReadCalibRNN). default: bilstm",
+             "'aggregate' (site-level AggrAttRNN). default: bilstm",
     )
     stm_train.add_argument(
         "--seq_len",
@@ -1446,15 +1352,6 @@ def main():
     stm_agg.add_argument('--aggregate_hidden', type=int, default=32, required=False,
                          help="hidden size for aggregate model, default 32")
 
-    stm_rc = sub_trainm.add_argument_group("READ_CALIB MODEL_HYPER (--model_class read_calib)")
-    stm_rc.add_argument('--read_calib_model_type', type=str, default="attbigru",
-                        choices=["attbigru", "attbilstm"], required=False,
-                        help="ReadCalibRNN architecture, default attbigru")
-    stm_rc.add_argument('--read_calib_hidden', type=int, default=32, required=False,
-                        help="hidden size for ReadCalibRNN, default 32")
-    stm_rc.add_argument('--read_calib_seq_len', type=int, default=11, required=False,
-                        help="K window size (CpG sites per read context), default 11")
-
     stm_trainingp = sub_trainm.add_argument_group("TRAINING PARALLEL")
     stm_trainingp.add_argument("--nodes", default=1, type=int,
                               help="number of nodes for distributed training, default 1")
@@ -1468,26 +1365,6 @@ def main():
                               help="if sync model params of gpu0 to other local gpus after per epoch")
     
     sub_trainm.set_defaults(func=main_trainm)
-
-    # common args =====================================================================================
-    parser.add_argument(
-        "--transfer",
-        action="store_true",
-        default=False,
-        help="weather use transfer learning",
-    )
-    parser.add_argument(
-        "--domain",
-        action="store_true",
-        default=False,
-        help="weather use domain attribute",
-    )
-    parser.add_argument(
-        "--freq", action="store_true", default=False, help="weather use freq attribute"
-    )
-    # parser.add_argument(
-    #     "--pod5", action="store_true", default=False, help="input pod5 format"
-    # )
 
     args = parser.parse_args()
     if hasattr(args, "func"):

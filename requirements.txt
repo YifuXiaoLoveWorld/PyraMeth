@@ -9,3 +9,6 @@ pod5
 h5py>=2.8.0
 pyslow5
 scipy
+einops
+timm
+numba

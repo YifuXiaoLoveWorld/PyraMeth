@@ -22,4 +22,7 @@ dependencies:
     - ont-fast5-api
     - pod5
     - pyslow5
+    - einops
+    - timm
+    - numba
     # - pyrameth  # uncomment to install from PyPI instead of source
