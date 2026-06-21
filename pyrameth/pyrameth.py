@@ -42,27 +42,6 @@ def main_call_freq(args):
     call_mods_frequency_to_file(args)
 
 
-def main_train(args):
-    from .train import train
-
-    display_args(args)
-    train(args)
-
-
-def main_denoise(args):
-    from .denoise import denoise
-    import time
-
-    print("[main] start..")
-    total_start = time.time()
-
-    display_args(args)
-    denoise(args)
-
-    endtime = time.time()
-    print("[main] costs {} seconds".format(endtime - total_start))
-
-
 def main_trainm(args):
     from .train_multigpu import train_multigpu
 
@@ -79,11 +58,7 @@ def main():
         "at genome level\n"
         "\t%(prog)s extract: extract features from corrected (tombo) "
         "fast5s for training or testing\n"
-        "\t%(prog)s train: train a model, need two independent "
-        "datasets for training and validating\n"
         "\t%(prog)s trainm: train multigpu\n"
-        # "\t%(prog)s denoise: denoise training samples by deep-learning, "
-        # "filter false positive samples (and false negative samples)"
         ,
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -113,17 +88,6 @@ def main():
         "\nIt is suggested that running this module 1 flowcell "
         "a time, or a group of flowcells a time, "
         "if the whole data is extremely large.",
-    )
-    sub_train = subparsers.add_parser(
-        "train",
-        description="train a model, need two independent datasets for training "
-        "and validating",
-    )
-    sub_denoise = subparsers.add_parser(
-        "denoise",
-        description="denoise training samples by deep-learning, "
-        "filter false positive samples (and "
-        "false negative samples).",
     )
     sub_trainm = subparsers.add_parser("trainm", description="[EXPERIMENTAL]train a model using multi gpus")
 
@@ -171,9 +135,9 @@ def main():
         "--model_class",
         type=str,
         default="mtm",
-        choices=["mtm", "bilstm"],
+        choices=["mtm"],
         required=False,
-        help="model architecture: 'mtm' (modelMTM) or 'bilstm' (ModelBiLSTM), default: mtm",
+        help="model architecture: 'mtm' (modelMTM), default: mtm",
     )
     sc_call.add_argument(
         "--seq_len",
@@ -191,20 +155,6 @@ def main():
     )
 
     # model param
-    sc_call.add_argument(
-        "--layernum1",
-        type=int,
-        default=3,
-        required=False,
-        help="lstm layer num for combined feature, default 3",
-    )
-    sc_call.add_argument(
-        "--layernum2",
-        type=int,
-        default=1,
-        required=False,
-        help="lstm layer num for seq feature (and for signal feature too), default 1",
-    )
     sc_call.add_argument("--class_num", type=int, default=2, required=False)
     sc_call.add_argument("--dropout_rate", type=float, default=0, required=False)
     sc_call.add_argument(
@@ -217,36 +167,6 @@ def main():
     sc_call.add_argument(
         "--n_embed", type=int, default=4, required=False, help="base_seq embedding_size"
     )
-    sc_call.add_argument(
-        "--is_base",
-        type=str,
-        default="yes",
-        required=False,
-        help="is using base features in seq model, default yes",
-    )
-    sc_call.add_argument(
-        "--is_signallen",
-        type=str,
-        default="yes",
-        required=False,
-        help="is using signal length feature of each base in seq model, default yes",
-    )
-    sc_call.add_argument(
-        "--is_trace",
-        type=str,
-        default="no",
-        required=False,
-        help="is using trace (base prob) feature of each base in seq model, default yes",
-    )
-    # BiLSTM model param
-    sc_call.add_argument(
-        "--hid_rnn",
-        type=int,
-        default=256,
-        required=False,
-        help="BiLSTM hidden_size for combined feature",
-    )
-
     sc_call.add_argument(
         "--batch_size",
         "-b",
@@ -527,7 +447,7 @@ def main():
     scb_model.add_argument("--model_path", "-m", type=str, required=True,
                            help="trained model checkpoint (.ckpt)")
     scb_model.add_argument("--model_class", type=str, default="mtm",
-                           choices=["mtm", "bilstm"])
+                           choices=["mtm"])
     scb_model.add_argument("--use_compile", type=str, default="no")
     scb_model.add_argument("--use_cpu", action="store_true", default=False)
     scb_model.add_argument("--nproc_cpu", type=int, default=1,
@@ -540,14 +460,6 @@ def main():
     scb_hp.add_argument("--dropout_rate", type=float, default=0.0)
     scb_hp.add_argument("--n_vocab",      type=int,   default=16)
     scb_hp.add_argument("--n_embed",      type=int,   default=4)
-
-    scb_lstm = sub_call_mods_bam.add_argument_group("BILSTM_HYPER")
-    scb_lstm.add_argument("--hid_rnn",      type=int, default=256)
-    scb_lstm.add_argument("--layernum1",    type=int, default=3)
-    scb_lstm.add_argument("--layernum2",    type=int, default=1)
-    scb_lstm.add_argument("--is_base",      type=str, default="yes")
-    scb_lstm.add_argument("--is_signallen", type=str, default="yes")
-    scb_lstm.add_argument("--is_trace",     type=str, default="no")
 
     scb_mtm = sub_call_mods_bam.add_argument_group("MTM_HYPER")
     scb_mtm.add_argument("--mtm_num_base_features", type=int,      default=1)
@@ -916,286 +828,6 @@ def main():
 
     sub_extract.set_defaults(func=main_extraction)
 
-    # sub_train =====================================================================================
-    st_input = sub_train.add_argument_group("INPUT")
-    st_input.add_argument("--train_file", type=str, required=True)
-    st_input.add_argument("--valid_file", type=str, required=True)
-
-    st_output = sub_train.add_argument_group("OUTPUT")
-    st_output.add_argument("--model_dir", type=str, required=True)
-
-    st_train = sub_train.add_argument_group("TRAIN")
-    # model input
-    st_train.add_argument(
-        "--model_class",
-        type=str,
-        default="bilstm",
-        choices=["bilstm"],
-        required=False,
-        help="model class, default: bilstm",
-    )
-    st_train.add_argument(
-        "--seq_len",
-        type=int,
-        default=21,
-        required=False,
-        help="len of kmer. default 21",
-    )
-    st_train.add_argument(
-        "--signal_len",
-        type=int,
-        default=15,
-        required=False,
-        help="the number of signals of one base to be used in deepsignal, default 15",
-    )
-    # model param
-    st_train.add_argument(
-        "--layernum1",
-        type=int,
-        default=3,
-        required=False,
-        help="lstm layer num for combined feature, default 3",
-    )
-    st_train.add_argument(
-        "--layernum2",
-        type=int,
-        default=1,
-        required=False,
-        help="lstm layer num for seq feature (and for signal feature too), default 1",
-    )
-    st_train.add_argument("--class_num", type=int, default=2, required=False)
-    st_train.add_argument("--dropout_rate", type=float, default=0.5, required=False)
-    st_train.add_argument(
-        "--n_vocab",
-        type=int,
-        default=16,
-        required=False,
-        help="base_seq vocab_size (15 base kinds from iupac)",
-    )
-    st_train.add_argument(
-        "--n_embed", type=int, default=4, required=False, help="base_seq embedding_size"
-    )
-    st_train.add_argument(
-        "--is_base",
-        type=str,
-        default="yes",
-        required=False,
-        help="is using base features in seq model, default yes",
-    )
-    st_train.add_argument(
-        "--is_signallen",
-        type=str,
-        default="yes",
-        required=False,
-        help="is using signal length feature of each base in seq model, default yes",
-    )
-    st_train.add_argument(
-        "--is_trace",
-        type=str,
-        default="no",
-        required=False,
-        help="is using trace (base prob) feature of each base in seq model, default yes",
-    )
-    # BiLSTM model param
-    st_train.add_argument(
-        "--hid_rnn",
-        type=int,
-        default=256,
-        required=False,
-        help="BiLSTM hidden_size for combined feature",
-    )
-    # model training
-    st_train.add_argument(
-        "--optim_type",
-        type=str,
-        default="Adam",
-        choices=["Adam", "RMSprop", "SGD"],
-        required=False,
-        help="type of optimizer to use, 'Adam' or 'SGD' or 'RMSprop', default Adam",
-    )
-    st_train.add_argument("--batch_size", type=int, default=512, required=False)
-    st_train.add_argument("--lr", type=float, default=0.001, required=False)
-    st_train.add_argument(
-        "--max_epoch_num",
-        action="store",
-        default=15,
-        type=int,
-        required=False,
-        help="max epoch num, default 15",
-    )
-    st_train.add_argument(
-        "--min_epoch_num",
-        action="store",
-        default=5,
-        type=int,
-        required=False,
-        help="min epoch num, default 5",
-    )
-    st_train.add_argument("--step_interval", type=int, default=100, required=False)
-
-    st_train.add_argument("--pos_weight", type=float, default=1.0, required=False)
-    # st_train.add_argument('--seed', type=int, default=1234,
-    #                        help='random seed')
-    # else
-    st_train.add_argument("--tmpdir", type=str, default="/tmp", required=False)
-
-    sub_train.set_defaults(func=main_train)
-
-    # # sub_denoise =====================================================================================
-    sd_input = sub_denoise.add_argument_group("INPUT")
-    sd_input.add_argument(
-        "--train_file",
-        type=str,
-        required=True,
-        help="file containing (combined positive and "
-        "negative) samples for training. better been "
-        "balanced in kmer level.",
-    )
-    #
-    sd_train = sub_denoise.add_argument_group("TRAIN")
-    sd_train.add_argument(
-        "--is_filter_fn",
-        type=str,
-        default="no",
-        required=False,
-        help="is filter false negative samples, , 'yes' or 'no', default no",
-    )
-    sd_train.add_argument(
-        "--model_class",
-        type=str,
-        default="bilstm",
-        choices=["bilstm", "mtm"],
-        required=False,
-        help="which model to use for denoise: 'bilstm' (default) or 'mtm'",
-    )
-    sd_train.add_argument(
-        "--seq_len",
-        type=int,
-        default=21,
-        required=False,
-        help="len of kmer. default 21",
-    )
-    sd_train.add_argument(
-        "--signal_len",
-        type=int,
-        default=15,
-        required=False,
-        help="the number of signals of one base to be used in deepsignal, default 15",
-    )
-    # # model param
-    sd_train.add_argument(
-        "--layernum1",
-        type=int,
-        default=3,
-        required=False,
-        help="lstm layer num for combined feature, default 3",
-    )
-    sd_train.add_argument(
-        "--layernum2",
-        type=int,
-        default=1,
-        required=False,
-        help="lstm layer num for seq feature (and for signal feature too), default 1",
-    )
-    sd_train.add_argument("--class_num", type=int, default=2, required=False)
-    sd_train.add_argument("--dropout_rate", type=float, default=0.2, required=False)
-    sd_train.add_argument(
-        "--n_vocab",
-        type=int,
-        default=16,
-        required=False,
-        help="base_seq vocab_size (15 base kinds from iupac)",
-    )
-    sd_train.add_argument(
-        "--n_embed", type=int, default=4, required=False, help="base_seq embedding_size"
-    )
-    sd_train.add_argument(
-        "--is_base",
-        type=str,
-        default="yes",
-        required=False,
-        help="is using base features in seq model, default yes",
-    )
-    sd_train.add_argument(
-        "--is_signallen",
-        type=str,
-        default="yes",
-        required=False,
-        help="is using signal length feature of each base in seq model, default yes",
-    )
-    # # BiLSTM model param
-    sd_train.add_argument(
-        "--hid_rnn",
-        type=int,
-        default=256,
-        required=False,
-        help="BiLSTM hidden_size for combined feature",
-    )
-    # # model training
-    sd_train.add_argument("--pos_weight", type=float, default=1.0, required=False)
-    sd_train.add_argument("--batch_size", type=int, default=512, required=False)
-    sd_train.add_argument("--lr", type=float, default=0.001, required=False)
-    sd_train.add_argument("--epoch_num", type=int, default=3, required=False)
-    sd_train.add_argument("--step_interval", type=int, default=100, required=False)
-    #
-    sd_denoise = sub_denoise.add_argument_group("DENOISE")
-    sd_denoise.add_argument("--iterations", type=int, default=10, required=False)
-    sd_denoise.add_argument("--rounds", type=int, default=3, required=False)
-    sd_denoise.add_argument(
-        "--score_cf",
-        type=float,
-        default=0.5,
-        required=False,
-        help="score cutoff to keep high quality (which prob>=score_cf) positive samples. "
-        "usually <= 0.5, default 0.5",
-    )
-    sd_denoise.add_argument(
-        "--kept_ratio",
-        type=float,
-        default=0.99,
-        required=False,
-        help="kept ratio of samples, to end denoise process",
-    )
-    sd_denoise.add_argument(
-        "--fst_iter_prob",
-        action="store_true",
-        default=False,
-        help="if output probs of samples after 1st iteration",
-    )
-    #
-    sd_mtm = sub_denoise.add_argument_group("MTM_HYPER (--model_class mtm)")
-    sd_mtm.add_argument('--mtm_num_base_features', type=int, default=1, required=False,
-                        help="MTM: raw signal features per base, default 1")
-    sd_mtm.add_argument('--mtm_hid_rnn', type=int, default=128, required=False,
-                        help="MTM: d_model hidden size, default 128")
-    sd_mtm.add_argument('--mtm_ratios', type=int, nargs='+', default=[2, 2, 2, 2], required=False,
-                        help="MTM: downsampling ratios, default [2,2,2,2]")
-    sd_mtm.add_argument('--mtm_r_hid', type=int, default=4, required=False,
-                        help="MTM: MLP hidden ratio in TokenMixingLayer, default 4")
-    sd_mtm.add_argument('--mtm_norm_first', type=str, default="True", required=False,
-                        help="MTM: pre-norm (True) or post-norm (False), default True")
-    sd_mtm.add_argument('--mtm_down_mode', type=str, default="concat",
-                        choices=["concat", "avg", "max"], required=False,
-                        help="MTM: downsampling mode, default concat")
-    sd_mtm.add_argument('--mtm_temporal_depth', type=int, default=2, required=False,
-                        help="MTM: temporal attention layers per TokenMixingLayer, default 2")
-    #
-    sd_ddp = sub_denoise.add_argument_group("DISTRIBUTED")
-    sd_ddp.add_argument('--bias', type=int, default=0, required=False,
-                        help="kmer slice start offset for BiLSTM denoise, default 0")
-    sd_ddp.add_argument('--nodes', type=int, default=1,
-                        help="number of nodes, default 1")
-    sd_ddp.add_argument('--ngpus_per_node', type=int, default=2,
-                        help="number of GPUs per node, default 2")
-    sd_ddp.add_argument('--dist_url', type=str, default="tcp://127.0.0.1:12315",
-                        help="url used to set up distributed training")
-    sd_ddp.add_argument('--node_rank', type=int, default=0,
-                        help="node rank for distributed training, default 0")
-    sd_ddp.add_argument('--dl_num_workers', type=int, default=0,
-                        help="DataLoader num_workers, default 0")
-    #
-    sub_denoise.set_defaults(func=main_denoise)
-
     # sub_train_multigpu =====================================================================================
     stm_input = sub_trainm.add_argument_group("INPUT")
     stm_input.add_argument('--train_file', type=str, required=True)
@@ -1208,11 +840,11 @@ def main():
     stm_train.add_argument(
         "--model_class",
         type=str,
-        default="bilstm",
-        choices=["bilstm", "mtm", "aggregate"],
+        default="mtm",
+        choices=["mtm", "aggregate"],
         required=False,
-        help="model class: 'bilstm' (ModelBiLSTM), 'mtm' (modelMTM), "
-             "'aggregate' (site-level AggrAttRNN). default: bilstm",
+        help="model class: 'mtm' (modelMTM), "
+             "'aggregate' (site-level AggrAttRNN). default: mtm",
     )
     stm_train.add_argument(
         "--seq_len",
@@ -1229,20 +861,6 @@ def main():
         help="the number of signals of one base to be used in deepsignal, default 15",
     )
     # model param
-    stm_train.add_argument(
-        "--layernum1",
-        type=int,
-        default=3,
-        required=False,
-        help="lstm layer num for combined feature, default 3",
-    )
-    stm_train.add_argument(
-        "--layernum2",
-        type=int,
-        default=1,
-        required=False,
-        help="lstm layer num for seq feature (and for signal feature too), default 1",
-    )
     stm_train.add_argument("--class_num", type=int, default=2, required=False)
     stm_train.add_argument("--dropout_rate", type=float, default=0.5, required=False)
     stm_train.add_argument(
@@ -1255,36 +873,6 @@ def main():
     stm_train.add_argument(
         "--n_embed", type=int, default=4, required=False, help="base_seq embedding_size"
     )
-    stm_train.add_argument(
-        "--is_base",
-        type=str,
-        default="yes",
-        required=False,
-        help="is using base features in seq model, default yes",
-    )
-    stm_train.add_argument(
-        "--is_signallen",
-        type=str,
-        default="yes",
-        required=False,
-        help="is using signal length feature of each base in seq model, default yes",
-    )
-    stm_train.add_argument(
-        "--is_trace",
-        type=str,
-        default="no",
-        required=False,
-        help="is using trace (base prob) feature of each base in seq model, default yes",
-    )
-    # BiLSTM model param
-    stm_train.add_argument(
-        "--hid_rnn",
-        type=int,
-        default=256,
-        required=False,
-        help="BiLSTM hidden_size for combined feature",
-    )
-
     stm_training = sub_trainm.add_argument_group("TRAINING")
     # model training
     stm_training.add_argument('--optim_type', type=str, default="Adam",

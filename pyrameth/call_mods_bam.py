@@ -41,7 +41,6 @@ try:
 except RuntimeError:
     pass
 
-from .models import ModelBiLSTM, modelMTM
 from .utils.process_utils import (
     base2code_dna,
     code2base_dna,
@@ -59,10 +58,9 @@ from .utils.process_utils import (
 from .utils import bam_reader
 from .utils_dataloader import (
     _get_ref_coords,
-    _group_signals_by_movetable_v2,
     _parse_bam_read,
 )
-from .call_modifications import load_model_bilstm, load_model_mtm
+from .call_modifications import load_model_mtm
 
 LOGGER = get_logger(__name__)
 
@@ -202,25 +200,16 @@ def _extract_read_data(signal, seq_read, motif_seqs, positions, args):
         bam_dict  : serialised BAM record
         fwd_seq   : forward-strand sequence (for MM tag)
         site_locs : sorted list of 0-based positions in fwd_seq
-        features  : list of per-site feature tuples (MTM or BiLSTM)
+        features  : list of per-site feature tuples (MTM)
         has_sites : bool
 
     Returns None to skip the read entirely (QC fail or bad data).
     """
-    is_bilstm = getattr(args, "model_class", "mtm") == "bilstm"
-
     parsed = _parse_bam_read(signal, seq_read, args)
     if parsed is None:
         return None
 
-    if is_bilstm:
-        seq, norm_signal, signal_rect, movetable, stride = parsed
-        try:
-            signal_group = _group_signals_by_movetable_v2(norm_signal, movetable, stride)
-        except (ValueError, AssertionError):
-            return None
-    else:
-        seq, _, signal_rect, _, _ = parsed
+    seq, _, signal_rect, _, _ = parsed
 
     if seq_read.mapping_quality < args.mapq:
         return None
@@ -284,15 +273,8 @@ def _extract_read_data(signal, seq_read, motif_seqs, positions, args):
         )
         k_signals = signal_rect[loc - num_bases: loc + num_bases + 1]
 
-        if is_bilstm:
-            k_sigs_v = signal_group[loc - num_bases: loc + num_bases + 1]
-            means = np.array([np.mean(x) for x in k_sigs_v], dtype=np.float32)
-            stds  = np.array([np.std(x)  for x in k_sigs_v], dtype=np.float32)
-            lens  = np.array([len(x)     for x in k_sigs_v], dtype=np.int32)
-            features.append((k_seq, k_signals, means, stds, lens))
-        else:
-            tag = compute_proximity_tag(loc, tag_locs, window=10)
-            features.append((k_seq, k_signals, tag))
+        tag = compute_proximity_tag(loc, tag_locs, window=10)
+        features.append((k_seq, k_signals, tag))
 
         site_locs.append(loc)
 
@@ -452,56 +434,6 @@ def _infer_batch_mtm(batch_reads, args, device, model):
     return results
 
 
-def _infer_batch_bilstm(batch_reads, device, model):
-    """
-    Run BiLSTM inference over all sites from a list of read_data dicts.
-    Returns list of (bam_dict, mm_str, ml_arr) per read.
-    """
-    all_k_seq, all_means, all_stds, all_lens, all_k_sig = [], [], [], [], []
-    boundaries = [0]
-
-    for rd in batch_reads:
-        for (k_seq, k_signals, means, stds, lens) in rd["features"]:
-            all_k_seq.append(torch.from_numpy(np.asarray(k_seq,     dtype=np.int64)))
-            all_k_sig.append(torch.from_numpy(np.asarray(k_signals, dtype=np.float32)))
-            all_means.append(torch.from_numpy(np.asarray(means,     dtype=np.float32)))
-            all_stds.append( torch.from_numpy(np.asarray(stds,      dtype=np.float32)))
-            all_lens.append( torch.from_numpy(np.asarray(lens,      dtype=np.float32)))
-        boundaries.append(boundaries[-1] + len(rd["features"]))
-
-    results = []
-    if not all_k_seq:
-        for rd in batch_reads:
-            results.append((rd["bam_dict"], None, None))
-        return results
-
-    kmers   = torch.stack(all_k_seq).to(device, non_blocking=True)
-    means   = torch.stack(all_means).to(device, non_blocking=True)
-    stds    = torch.stack(all_stds).to(device,  non_blocking=True)
-    lens    = torch.stack(all_lens).to(device,  non_blocking=True)
-    signals = torch.stack(all_k_sig).to(device, non_blocking=True)
-
-    with torch.inference_mode():
-        _, probs = model(kmers.long(), means, stds, lens, signals)
-
-    probs_np = probs.cpu().numpy()
-
-    if device.type == "cuda":
-        del kmers, means, stds, lens, signals, probs
-        torch.cuda.empty_cache()
-
-    for i, rd in enumerate(batch_reads):
-        s, e = boundaries[i], boundaries[i + 1]
-        if s == e:
-            results.append((rd["bam_dict"], None, None))
-            continue
-        site_probs = probs_np[s:e, 1].tolist()
-        mm_str, ml_arr = _build_mm_ml(rd["site_locs"], site_probs, rd["fwd_seq"])
-        results.append((rd["bam_dict"], mm_str, ml_arr))
-
-    return results
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Model worker
 # ─────────────────────────────────────────────────────────────────────────────
@@ -518,8 +450,7 @@ def model_worker_bam(rank, device, queue, output_q, args, nproc_io):
     else:
         torch.set_num_threads(max(1, args.cpu_threads_per_worker))
 
-    is_mtm = (args.model_class == "mtm")
-    model  = load_model_mtm(args, device) if is_mtm else load_model_bilstm(args, device)
+    model = load_model_mtm(args, device)
     model.eval()
 
     end_count = 0
@@ -533,10 +464,7 @@ def model_worker_bam(rank, device, queue, output_q, args, nproc_io):
 
         # item is a list of read_data dicts (_READS_PER_BATCH reads)
         try:
-            if is_mtm:
-                results = _infer_batch_mtm(item, args, device, model)
-            else:
-                results = _infer_batch_bilstm(item, device, model)
+            results = _infer_batch_mtm(item, args, device, model)
             output_q.put(results)
         except Exception as e:
             print(f"[Worker-{rank}] inference error: {e}", flush=True)
@@ -702,7 +630,7 @@ def main():
     p_model = parser.add_argument_group("MODEL")
     p_model.add_argument("--model_path", "-m", required=True)
     p_model.add_argument("--model_class", type=str, default="mtm",
-                         choices=["mtm", "bilstm"])
+                         choices=["mtm"])
     p_model.add_argument("--use_compile", type=str2bool, default="no")
     p_model.add_argument("--use_cpu", action="store_true", default=False)
     p_model.add_argument("--nproc_cpu", type=int, default=1)
@@ -714,14 +642,6 @@ def main():
     p_hp.add_argument("--dropout_rate", type=float, default=0.0)
     p_hp.add_argument("--n_vocab",      type=int,   default=16)
     p_hp.add_argument("--n_embed",      type=int,   default=4)
-
-    p_lstm = parser.add_argument_group("BILSTM_HYPER")
-    p_lstm.add_argument("--hid_rnn",      type=int, default=256)
-    p_lstm.add_argument("--layernum1",    type=int, default=3)
-    p_lstm.add_argument("--layernum2",    type=int, default=1)
-    p_lstm.add_argument("--is_base",      type=str, default="yes")
-    p_lstm.add_argument("--is_signallen", type=str, default="yes")
-    p_lstm.add_argument("--is_trace",     type=str, default="no")
 
     p_mtm = parser.add_argument_group("MTM_HYPER")
     p_mtm.add_argument("--mtm_num_base_features", type=int,           default=1)

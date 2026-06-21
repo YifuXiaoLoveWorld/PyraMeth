@@ -11,7 +11,6 @@ import time
 import re
 
 from .models import (
-    ModelBiLSTM,
     AggrAttRNN,
     modelMTM
 )
@@ -81,294 +80,6 @@ def checkpoint(model, gpu, model_save_path):
     model.module.load_state_dict(
         torch.load(model_save_path, map_location=map_location))
 
-
-def train_worker(local_rank, global_world_size, args):
-    global_rank = args.node_rank * args.ngpus_per_node + local_rank
-
-    dist.init_process_group(
-        backend="nccl",
-        init_method=args.dist_url,
-        world_size=global_world_size,
-        rank=global_rank,
-    )
-
-    # device = torch.device("cuda", local_rank)
-    # torch.cuda.set_device(local_rank)
-
-    sys.stderr.write("training_process-{} [init] == local rank: {}, global rank: {} ==\n".format(os.getpid(),
-                                                                                                local_rank,
-                                                                                                global_rank))
-    
-    # 1. define network
-    if global_rank == 0 or args.epoch_sync:
-        model_dir = args.model_dir
-        if model_dir != "/":
-            model_dir = os.path.abspath(model_dir).rstrip("/")
-            if local_rank == 0:
-                if not os.path.exists(model_dir):
-                    os.makedirs(model_dir)
-                else:
-                    model_regex = re.compile(
-                        r"" + args.model_class + "\.b\d+_s\d+_epoch\d+\.ckpt*"
-                    )
-                    for mfile in os.listdir(model_dir):
-                        if model_regex.match(mfile) is not None:
-                            os.remove(model_dir + "/" + mfile)
-            model_dir += "/"
-
-    model = ModelBiLSTM(
-        args.seq_len,
-        args.signal_len,
-        args.layernum1,
-        args.layernum2,
-        args.class_num,
-        args.dropout_rate,
-        args.hid_rnn,
-        args.n_vocab,
-        args.n_embed,
-        str2bool(args.is_base),
-        str2bool(args.is_signallen),
-        str2bool(args.is_trace),
-        "both_bilstm",
-        #local_rank
-    )
-
-    if args.init_model is not None:
-        sys.stderr.write("training_process-{} loading pre-trained model: {}\n".format(os.getpid(), args.init_model))
-        para_dict = torch.load(args.init_model, map_location=torch.device('cpu'))
-        model_dict = model.state_dict()
-        model_dict.update(para_dict)
-        model.load_state_dict(model_dict)
-    
-    if str2bool(args.use_compile):
-        try:
-            model = torch.compile(model)
-        except:
-            raise ImportError('torch.compile does not exist in PyTorch<2.0.')
-
-    dist.barrier()
-
-    model = model.cuda(local_rank)
-    # DistributedDataParallel
-    model = DDP(model, device_ids=[local_rank], output_device=local_rank,
-                find_unused_parameters=False)
-    
-    # 2. define dataloader
-    sys.stderr.write("training_process-{} reading data..\n".format(os.getpid()))
-    
-    train_linenum = count_line_num(args.train_file, False)
-    train_offsets = generate_offsets(args.train_file)
-    train_dataset = SignalFeaData1s(args.train_file, train_offsets, train_linenum)
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset,
-                                                                    shuffle=True)
-    train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
-                                               batch_size=args.batch_size,
-                                               shuffle=False,
-                                               num_workers=args.dl_num_workers,
-                                               pin_memory=True,
-                                               sampler=train_sampler)
-
-    valid_linenum = count_line_num(args.valid_file, False)
-    valid_offsets = generate_offsets(args.valid_file)
-    valid_dataset = SignalFeaData1s(args.valid_file, valid_offsets, valid_linenum)
-    valid_sampler = torch.utils.data.distributed.DistributedSampler(valid_dataset,
-                                                                    shuffle=True)
-    valid_loader = torch.utils.data.DataLoader(dataset=valid_dataset,
-                                               batch_size=args.batch_size,
-                                               shuffle=False,
-                                               num_workers=args.dl_num_workers,
-                                               pin_memory=True,
-                                               sampler=valid_sampler)
-    
-    # Loss and optimizer
-    weight_rank = torch.from_numpy(np.array([1, args.pos_weight])).float()
-    weight_rank = weight_rank.cuda(local_rank)
-    criterion = nn.CrossEntropyLoss(weight=weight_rank)
-    if args.optim_type == "Adam":
-        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    elif args.optim_type == "RMSprop":
-        optimizer = torch.optim.RMSprop(model.parameters(), lr=args.lr)
-    elif args.optim_type == "SGD":
-        optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.8)
-    else:
-        raise ValueError("optim_type is not right!")
-    if args.lr_scheduler == "StepLR":
-        scheduler = StepLR(optimizer, step_size=args.lr_decay_step, gamma=args.lr_decay)
-    elif args.lr_scheduler == "ReduceLROnPlateau":
-        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=args.lr_decay,
-                                      patience=args.lr_patience)
-    else:
-        raise ValueError("--lr_scheduler is not right!")
-    
-
-    # Train the model
-    total_step = len(train_loader)
-    sys.stderr.write("training_process-{} total_step: {}\n".format(os.getpid(), total_step))
-    curr_best_accuracy = 0
-    curr_best_accuracy_loc = 0
-    curr_lowest_loss = 10000
-    v_accuracy_epoches = []
-    model.train()
-    for epoch in range(args.max_epoch_num):
-        # set train sampler
-        train_loader.sampler.set_epoch(epoch)
-
-        no_best_model = True
-        tlosses = []
-        start = time.time()
-        for i, sfeatures in enumerate(train_loader):
-            _, kmer, base_means, base_stds, base_signal_lens, signals, labels, _ = (
-                sfeatures
-            )
-            kmer = kmer.cuda(local_rank, non_blocking=True)
-            base_means = base_means.cuda(local_rank, non_blocking=True)
-            base_stds = base_stds.cuda(local_rank, non_blocking=True)
-            base_signal_lens = base_signal_lens.cuda(local_rank, non_blocking=True)
-            # base_probs = base_probs.cuda(local_rank, non_blocking=True)
-            signals = signals.cuda(local_rank, non_blocking=True)
-            labels = labels.cuda(local_rank, non_blocking=True)
-
-            # Forward pass
-            outputs, _ = model(
-                kmer, base_means, base_stds, base_signal_lens, signals
-            )
-            loss = criterion(outputs, labels)
-
-            # TODO: reduce loss? - no need
-            # TODO: maybe don't need barrier() either
-            # dist.barrier()
-            # loss = reduce_mean(loss, global_world_size)
-
-            # Backward and optimize
-            optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
-            optimizer.step()
-
-            tlosses.append(loss.detach().item())
-            if global_rank == 0 and ((i + 1) % args.step_interval == 0 or (i + 1) == total_step):
-                time_cost = time.time() - start
-                sys.stderr.write("Epoch [{}/{}], Step [{}/{}]; "
-                                 "TrainLoss: {:.4f}; Time: {:.2f}s\n".format(epoch + 1,
-                                                                             args.max_epoch_num, i + 1,
-                                                                             total_step, np.mean(tlosses),
-                                                                             time_cost))
-                sys.stderr.flush()
-                start = time.time()
-                tlosses = []
-
-        model.eval()
-        with torch.no_grad():
-            vlosses, vlabels_total, vpredicted_total = [], [], []
-            v_meanloss = 10000
-            for vsfeatures in valid_loader:
-                (
-                    _,
-                    vkmer,
-                    vbase_means,
-                    vbase_stds,
-                    vbase_signal_lens,
-                    vsignals,
-                    vlabels,
-                    _vtags,
-                ) = vsfeatures
-
-                vkmer = vkmer.cuda(local_rank, non_blocking=True)
-                vbase_means = vbase_means.cuda(local_rank, non_blocking=True)
-                vbase_stds = vbase_stds.cuda(local_rank, non_blocking=True)
-                vbase_signal_lens = vbase_signal_lens.cuda(local_rank, non_blocking=True)
-                # vbase_probs = vbase_probs.cuda(local_rank, non_blocking=True)
-                vsignals = vsignals.cuda(local_rank, non_blocking=True)
-                vlabels = vlabels.cuda(local_rank, non_blocking=True)
-                voutputs, vlogits = model(
-                    vkmer, vbase_means, vbase_stds, vbase_signal_lens, vsignals
-                )
-                vloss = criterion(voutputs, vlabels)
-
-                vloss = reduce_mean(vloss, global_world_size)
-
-                _, vpredicted = torch.max(vlogits.data, 1)
-
-                vlabels = vlabels.cpu()
-                vpredicted = vpredicted.cpu()
-
-                vlosses.append(vloss.item())
-                vlabels_total += vlabels.tolist()
-                vpredicted_total += vpredicted.tolist()
-
-            v_accuracy = metrics.accuracy_score(vlabels_total, vpredicted_total)
-            v_precision = metrics.precision_score(vlabels_total, vpredicted_total)
-            v_recall = metrics.recall_score(vlabels_total, vpredicted_total)
-            v_meanloss = np.mean(vlosses)
-
-            if v_accuracy > curr_best_accuracy - 0.0001:
-                if global_rank == 0:
-                    # model.state_dict() or model.module.state_dict()?
-                    torch.save(model.module.state_dict(),
-                               model_dir + args.model_class +
-                               '.b{}_s{}_epoch{}.ckpt'.format(args.seq_len, args.signal_len, epoch + 1))
-                # TODO: dist.barrier()? and read/sync model dict?
-                if v_accuracy > curr_best_accuracy:
-                    curr_best_accuracy = v_accuracy
-                    curr_best_accuracy_loc = epoch + 1
-
-                if len(v_accuracy_epoches) > 0 and v_accuracy > \
-                        v_accuracy_epoches[-1]:
-                    if global_rank == 0:
-                        torch.save(model.module.state_dict(),
-                                   model_dir + args.model_class +
-                                   '.betterthanlast.b{}_s{}_epoch{}.ckpt'.format(args.seq_len,
-                                                                                 args.signal_len,
-                                                                                 epoch + 1))
-            if v_meanloss < curr_lowest_loss:
-                curr_lowest_loss = v_meanloss
-                no_best_model = False
-
-            v_accuracy_epoches.append(v_accuracy)
-
-            time_cost = time.time() - start
-            if global_rank == 0:
-                try:
-                    last_lr = scheduler.get_last_lr()[0]
-                    sys.stderr.write('Epoch [{}/{}]; LR: {:.4e}; '
-                                     'ValidLoss: {:.4f}, '
-                                     'Acc: {:.4f}, Prec: {:.4f}, Reca: {:.4f}, '
-                                     'Best_acc: {:.4f}; Time: {:.2f}s\n'
-                                     .format(epoch + 1, args.max_epoch_num, last_lr,
-                                             v_meanloss, v_accuracy, v_precision, v_recall,
-                                             curr_best_accuracy, time_cost))
-                except Exception:
-                    sys.stderr.write('Epoch [{}/{}]; '
-                                    'ValidLoss: {:.4f}, '
-                                    'Acc: {:.4f}, Prec: {:.4f}, Reca: {:.4f}, '
-                                    'Best_acc: {:.4f}; Time: {:.2f}s\n'
-                                    .format(epoch + 1, args.max_epoch_num,
-                                            v_meanloss, v_accuracy, v_precision, v_recall,
-                                            curr_best_accuracy, time_cost))
-
-                sys.stderr.flush()
-        model.train()
-
-        if no_best_model and epoch >= args.min_epoch_num - 1:
-            sys.stderr.write("training_process-{} early stop!\n".format(os.getpid()))
-            break
-
-        if args.epoch_sync:
-            sync_ckpt = model_dir + args.model_class + \
-                        '.epoch_sync_node{}.b{}_epoch{}.ckpt'.format(args.node_rank, args.seq_len, epoch + 1)
-            checkpoint(model, local_rank, sync_ckpt)
-
-        if args.lr_scheduler == "ReduceLROnPlateau":
-            lr_reduce_metric = v_meanloss
-            scheduler.step(lr_reduce_metric)
-        else:
-            scheduler.step()
-
-    if global_rank == 0:
-        sys.stderr.write("best model is in epoch {} (Acc: {})\n".format(curr_best_accuracy_loc,
-                                                                        curr_best_accuracy))
-    clear_linecache()
-    cleanup()
 
 def train_worker_mtm(local_rank, global_world_size, args):
     """
@@ -1091,12 +802,10 @@ def train_multigpu(args):
 
     global_world_size = args.ngpus_per_node * args.nodes
 
-    if args.model_class == "mtm":
-        worker_fn = train_worker_mtm
-    elif args.model_class == "aggregate":
+    if args.model_class == "aggregate":
         worker_fn = train_worker_aggregate
     else:
-        worker_fn = train_worker
+        worker_fn = train_worker_mtm
     mp.spawn(worker_fn, nprocs=args.ngpus_per_node, args=(global_world_size, args))
 
     endtime = time.time()
@@ -1117,11 +826,11 @@ def main():
     st_train.add_argument(
         "--model_class",
         type=str,
-        default="bilstm",
-        choices=["bilstm", "mtm", "aggregate"],
+        default="mtm",
+        choices=["mtm", "aggregate"],
         required=False,
-        help="model class: 'bilstm' (ModelBiLSTM), 'mtm' (modelMTM), "
-             "'aggregate' (site-level AggrAttRNN). default: bilstm",
+        help="model class: 'mtm' (modelMTM), "
+             "'aggregate' (site-level AggrAttRNN). default: mtm",
     )
     st_train.add_argument(
         "--seq_len",
@@ -1138,20 +847,6 @@ def main():
         help="the number of signals of one base to be used in deepsignal, default 15",
     )
     # model param
-    st_train.add_argument(
-        "--layernum1",
-        type=int,
-        default=3,
-        required=False,
-        help="lstm layer num for combined feature, default 3",
-    )
-    st_train.add_argument(
-        "--layernum2",
-        type=int,
-        default=1,
-        required=False,
-        help="lstm layer num for seq feature (and for signal feature too), default 1",
-    )
     st_train.add_argument("--class_num", type=int, default=2, required=False)
     st_train.add_argument("--dropout_rate", type=float, default=0.5, required=False)
     st_train.add_argument(
@@ -1164,36 +859,6 @@ def main():
     st_train.add_argument(
         "--n_embed", type=int, default=4, required=False, help="base_seq embedding_size"
     )
-    st_train.add_argument(
-        "--is_base",
-        type=str,
-        default="yes",
-        required=False,
-        help="is using base features in seq model, default yes",
-    )
-    st_train.add_argument(
-        "--is_signallen",
-        type=str,
-        default="yes",
-        required=False,
-        help="is using signal length feature of each base in seq model, default yes",
-    )
-    st_train.add_argument(
-        "--is_trace",
-        type=str,
-        default="no",
-        required=False,
-        help="is using trace (base prob) feature of each base in seq model, default yes",
-    )
-    # BiLSTM model param
-    st_train.add_argument(
-        "--hid_rnn",
-        type=int,
-        default=256,
-        required=False,
-        help="BiLSTM hidden_size for combined feature",
-    )
-
     st_training = parser.add_argument_group("TRAINING")
     # model training
     st_training.add_argument('--optim_type', type=str, default="Adam",

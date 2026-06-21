@@ -5,10 +5,9 @@ Core data processing functions and IO producer for inference.
 Active components:
   - build_signal_rect_from_movetable  : fast vectorised signal-to-base mapping
   - get_q2tloc_from_cigar             : CIGAR → query-to-ref position mapping
-  - _group_signals_by_movetable_v2    : variable-length signal grouping (BiLSTM)
-  - _get_signals_rect                 : pad/trim signal windows to fixed length (BiLSTM)
-  - process_data_fast                 : feature extraction for modelMTM (no mean/std/len)
-  - process_data_bilstm               : feature extraction for ModelBiLSTM (with mean/std/len)
+  - _group_signals_by_movetable_v2    : variable-length signal grouping
+  - _get_signals_rect                 : pad/trim signal windows to fixed length
+  - process_data_fast                 : feature extraction for modelMTM
   - producer                          : multi-process IO worker (pod5 / slow5)
 """
 
@@ -78,7 +77,7 @@ def get_q2tloc_from_cigar(r_cigar_tuple, strand, seq_len):
 def _group_signals_by_movetable_v2(trimed_signals, movetable, stride):
     """
     Group raw signals per base using the move table (Python-loop version).
-    Used by process_data_bilstm to obtain variable-length per-base signals
+    Used by feature extraction to obtain variable-length per-base signals
     for mean / std / len computation.
     """
     if movetable[0] != 1:
@@ -134,7 +133,7 @@ def build_signal_rect_from_movetable(trimed_signals, movetable, stride, signals_
     """
     Build (num_events, signals_len) rect array from move table.
     NaN-padded for short events; downsampled for long events.
-    Used by process_data_fast (MTM) and process_data_bilstm (BiLSTM).
+    Used by process_data_fast (MTM).
     """
     move_idx = np.flatnonzero(movetable == 1)
     move_idx = np.append(move_idx, len(movetable))
@@ -300,96 +299,6 @@ def process_data_fast(signal, seq_read, motif_seqs, positions, args):
     return out
 
 
-def process_data_bilstm(signal, seq_read, motif_seqs, positions, args):
-    """
-    Extract features for ModelBiLSTM inference.
-    Output per site:
-        (sampleinfo, k_seq[int64], means[float32], stds[float32],
-         lens[int32], k_signals_rect[float32], label)
-    Computes per-base mean/std/len via variable-length signal grouping.
-
-    args.plant (bool): same semantics as process_data_fast.
-    """
-    parsed = _parse_bam_read(signal, seq_read, args)
-    if parsed is None:
-        return []
-    seq, norm_signal, signal_rect, movetable, stride = parsed
-
-    if seq_read.mapping_quality < args.mapq:
-        return []
-
-    # variable-length grouping for mean/std/len
-    signal_group = _group_signals_by_movetable_v2(norm_signal, movetable, stride)
-
-    tsite_locs = get_refloc_of_methysite_in_motif(seq, motif_seqs, args.mod_loc)
-    if not tsite_locs:
-        return []
-
-    num_bases = (args.seq_len - 1) // 2
-    coords    = _get_ref_coords(seq_read, seq)
-
-    if not seq_read.is_unmapped:
-        qa_start = seq_read.query_alignment_start
-        qa_end   = seq_read.query_alignment_end
-        if (qa_end - qa_start) / seq_read.query_length < args.coverage_ratio:
-            return []
-
-    strand   = coords["strand"]   if coords else "."
-    ref_name = coords["ref_name"] if coords else "."
-
-    chrom_args = getattr(args, "chrom", None) or []
-    _excl = {c[2:] for c in chrom_args if c.startswith("no")}
-    _incl = {c for c in chrom_args if not c.startswith("no")}
-    if (_excl and ref_name in _excl) or (_incl and ref_name not in _incl):
-        return []
-
-    # Pre-compute tag_locs once per read (BiLSTM currently doesn't use tag,
-    # but keeping the logic symmetric for future use)
-    plant = getattr(args, "plant", False)
-    if plant:
-        tag_locs = [i for i, b in enumerate(seq) if b == "C"]
-    else:
-        tag_locs = tsite_locs  # already sorted
-
-    out = []
-    for loc in tsite_locs:
-        if not (num_bases <= loc < len(seq) - num_bases):
-            continue
-
-        ref_pos = -1
-        if coords:
-            s, e = coords["seq_start"], coords["seq_end"]
-            if not (s <= loc < e):
-                continue
-            rpos = coords["q_to_r_poss"][loc - s]
-            if rpos == -1:
-                continue
-            ref_pos = (
-                coords["ref_end"] - 1 - rpos if strand == "-"
-                else coords["ref_start"] + rpos
-            )
-
-        if positions is not None:
-            if f"{ref_name}\t{ref_pos}\t{strand}" not in positions:
-                continue
-
-        k_mer    = seq[loc - num_bases: loc + num_bases + 1]
-        k_seq    = np.fromiter(
-            (base2code_dna[x] for x in k_mer),
-            dtype=np.int64, count=args.seq_len,
-        )
-        k_sigs_v = signal_group[loc - num_bases: loc + num_bases + 1]
-        means    = np.array([np.mean(x) for x in k_sigs_v], dtype=np.float32)
-        stds     = np.array([np.std(x)  for x in k_sigs_v], dtype=np.float32)
-        lens     = np.array([len(x)     for x in k_sigs_v], dtype=np.int32)
-        k_signals = signal_rect[loc - num_bases: loc + num_bases + 1]
-        sampleinfo = f"{ref_name}\t{ref_pos}\t{strand}\t.\t{seq_read.query_name}\t."
-
-        out.append((sampleinfo, k_seq, means, stds, lens, k_signals, args.methy_label))
-
-    return out
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # IO Producer  (one process per worker_id shard)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -411,9 +320,7 @@ def producer(worker_id, files, queues, args, motif_seqs, positions,
 
     bam_index = bam_reader.ReadIndexedBam(args.bam)
 
-    # choose processing function based on model class
-    is_bilstm = (getattr(args, "model_class", "mtm") == "bilstm")
-    process_fn = process_data_bilstm if is_bilstm else process_data_fast
+    process_fn = process_data_fast
 
     BUF_SIZE = 128
     buffers  = [[] for _ in range(num_workers)]

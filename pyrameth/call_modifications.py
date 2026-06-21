@@ -1,7 +1,7 @@
 """
 call_modifications.py
 Unified inference entry point: inference_ultra()
-Supports: modelMTM / ModelBiLSTM; pod5 / slow5 / fast5 / tsv input; GPU / CPU
+Supports: modelMTM; pod5 / slow5 / fast5 / tsv input; GPU / CPU
 """
 
 from __future__ import absolute_import
@@ -20,7 +20,7 @@ try:
 except RuntimeError:
     pass
 
-from .models import ModelBiLSTM, modelMTM
+from .models import modelMTM
 from .utils.process_utils import (
     base2code_dna, code2base_dna, str2bool, display_args,
     get_motif_seqs, get_files, read_position_file,
@@ -49,52 +49,6 @@ def load_model_mtm(args, device):
         vocab_size=args.n_vocab,
         embedding_size=args.n_embed,
         temporal_depth=args.mtm_temporal_depth,
-    )
-
-    checkpoint = torch.load(args.model_path, map_location="cpu")
-
-    # Clean torch.compile / DDP key prefixes
-    clean = {}
-    for k, v in checkpoint.items():
-        k = k.replace("_orig_mod.", "").replace("module.", "")
-        clean[k] = v
-
-    model.load_state_dict(clean, strict=True)
-    model = model.to(device)
-    model.eval()
-
-    if getattr(args, "use_compile", False):
-        if device.type == "cpu":
-            LOGGER.warning(
-                "torch.compile skipped on CPU: the inductor backend generates "
-                "invalid C++ for CPU targets in this PyTorch version. "
-                "Use --use_compile no, or run on a GPU."
-            )
-        else:
-            try:
-                model = torch.compile(model, mode="reduce-overhead")
-            except Exception as e:
-                LOGGER.warning(f"torch.compile failed, falling back to eager: {e}")
-
-    return model
-
-
-def load_model_bilstm(args, device):
-    """Build and load a ModelBiLSTM checkpoint onto device."""
-    model = ModelBiLSTM(
-        seq_len=args.seq_len,
-        signal_len=args.signal_len,
-        num_layers1=args.layernum1,
-        num_layers2=args.layernum2,
-        num_classes=args.class_num,
-        dropout_rate=args.dropout_rate,
-        hidden_size=args.hid_rnn,
-        vocab_size=args.n_vocab,
-        embedding_size=args.n_embed,
-        is_base=str2bool(args.is_base),
-        is_signallen=str2bool(args.is_signallen),
-        is_trace=str2bool(args.is_trace),
-        module="both_bilstm",
     )
 
     checkpoint = torch.load(args.model_path, map_location="cpu")
@@ -184,49 +138,6 @@ def _run_batch_mtm(batch_info, batch_k, batch_s, batch_t, args, device, model):
     return out_lines
 
 
-def _run_batch_bilstm(batch_info, batch_k, batch_means, batch_stds,
-                      batch_lens, batch_s, device, model):
-    """
-    Run one forward pass for ModelBiLSTM.
-    Input tensors come from process_data_bilstm():
-        batch_k     : list of np.int64   (seq_len,)
-        batch_means : list of np.float32 (seq_len,)
-        batch_stds  : list of np.float32 (seq_len,)
-        batch_lens  : list of np.int32   (seq_len,)
-        batch_s     : list of np.float32 (seq_len, signal_len)
-    """
-    kmers   = torch.stack(batch_k).to(device, non_blocking=True)      # (B, L)
-    means   = torch.stack(batch_means).to(device, non_blocking=True)  # (B, L)
-    stds    = torch.stack(batch_stds).to(device, non_blocking=True)   # (B, L)
-    lens    = torch.stack(batch_lens).to(device, non_blocking=True)   # (B, L)
-    signals = torch.stack(batch_s).to(device, non_blocking=True)      # (B, L, S)
-
-    with torch.inference_mode():
-        # ModelBiLSTM.forward returns (logits, softmax_probs)
-        _, probs = model(kmers.long(), means, stds, lens, signals)
-        pred = torch.argmax(probs, dim=1)
-
-    probs_np = probs.cpu().numpy()
-    pred_np  = pred.cpu().numpy()
-    kmers_np = kmers.cpu().numpy()
-
-    out_lines = []
-    for i in range(len(batch_info)):
-        p0 = round(float(probs_np[i][0]), 6)
-        p1 = round(float(probs_np[i][1]), 6)
-        kseq  = "".join(code2base_dna[int(x)] for x in kmers_np[i])
-        c     = len(kseq) // 2
-        kmer5 = kseq[max(c - 2, 0):c + 3]
-        out_lines.append("\t".join([batch_info[i], str(p0), str(p1),
-                                    str(int(pred_np[i])), kmer5]))
-
-    if device.type == "cuda":
-        del kmers, means, stds, lens, signals, probs, pred
-        torch.cuda.empty_cache()
-
-    return out_lines
-
-
 # ─────────────────────────────────────────────
 # Unified model worker  (GPU rank or CPU)
 # ─────────────────────────────────────────────
@@ -235,7 +146,6 @@ def model_worker(rank, device, queue, pred_q, args, nproc_io):
     """
     Consume feature items from queue, run inference, push result lines to pred_q.
     Works for both GPU (device=cuda:N) and CPU (device=cpu).
-    Works for both modelMTM and ModelBiLSTM (controlled by args.model_class).
     """
     if device.type == "cuda":
         torch.cuda.set_device(device.index)
@@ -244,12 +154,7 @@ def model_worker(rank, device, queue, pred_q, args, nproc_io):
     else:
         torch.set_num_threads(max(1, args.cpu_threads_per_worker))
 
-    is_mtm = (args.model_class == "mtm")
-
-    if is_mtm:
-        model = load_model_mtm(args, device)
-    else:
-        model = load_model_bilstm(args, device)
+    model = load_model_mtm(args, device)
     model.eval()
 
     # ── per-worker timing (set DEEPSIGNAL_PROFILE=1 to enable) ────────────
@@ -261,8 +166,7 @@ def model_worker(rank, device, queue, pred_q, args, nproc_io):
     # ── batch buffers ──────────────────────────────
     batch_info = []
     batch_k, batch_s = [], []
-    batch_t = []                                        # MTM only: proximity tag
-    batch_means, batch_stds, batch_lens = [], [], []    # BiLSTM only
+    batch_t = []                                        # proximity tag
     end_count = 0
 
     def flush():
@@ -271,16 +175,10 @@ def model_worker(rank, device, queue, pred_q, args, nproc_io):
             return
         if _profile:
             _t0 = _time.perf_counter()
-        if is_mtm:
-            lines = _run_batch_mtm(
-                batch_info, batch_k, batch_s, batch_t,
-                args, device, model,
-            )
-        else:
-            lines = _run_batch_bilstm(
-                batch_info, batch_k, batch_means, batch_stds,
-                batch_lens, batch_s, device, model,
-            )
+        lines = _run_batch_mtm(
+            batch_info, batch_k, batch_s, batch_t,
+            args, device, model,
+        )
         if _profile:
             if device.type == "cuda":
                 torch.cuda.synchronize(device)
@@ -299,7 +197,6 @@ def model_worker(rank, device, queue, pred_q, args, nproc_io):
         if lines:
             pred_q.put(lines)
         batch_info.clear(); batch_k.clear(); batch_s.clear(); batch_t.clear()
-        batch_means.clear(); batch_stds.clear(); batch_lens.clear()
 
     # ── main loop ──────────────────────────────────
     while True:
@@ -320,22 +217,12 @@ def model_worker(rank, device, queue, pred_q, args, nproc_io):
         if _profile:
             _t0 = _time.perf_counter()
         for sub in items:
-            if is_mtm:
-                # sub = (sampleinfo, k_seq, k_signals_rect, label, tag)
-                # label (sub[3]) discarded – not needed for inference
-                batch_info.append(sub[0])
-                batch_k.append(np.asarray(sub[1], dtype=np.int64))
-                batch_s.append(np.asarray(sub[2], dtype=np.float32))
-                batch_t.append(sub[4])
-            else:
-                # sub = (sampleinfo, k_seq, means, stds, lens, k_signals_rect, label)
-                # label (sub[6]) discarded – not needed for inference
-                batch_info.append(sub[0])
-                batch_k.append(torch.from_numpy(np.asarray(sub[1], dtype=np.int64)))
-                batch_means.append(torch.from_numpy(np.asarray(sub[2], dtype=np.float32)))
-                batch_stds.append(torch.from_numpy(np.asarray(sub[3], dtype=np.float32)))
-                batch_lens.append(torch.from_numpy(np.asarray(sub[4], dtype=np.float32)))
-                batch_s.append(torch.from_numpy(np.asarray(sub[5], dtype=np.float32)))
+            # sub = (sampleinfo, k_seq, k_signals_rect, label, tag)
+            # label (sub[3]) discarded – not needed for inference
+            batch_info.append(sub[0])
+            batch_k.append(np.asarray(sub[1], dtype=np.int64))
+            batch_s.append(np.asarray(sub[2], dtype=np.float32))
+            batch_t.append(sub[4])
 
             if len(batch_info) >= args.batch_size:
                 if _profile:
@@ -363,7 +250,6 @@ def model_worker(rank, device, queue, pred_q, args, nproc_io):
 def tsv_producer(tsv_file, queues, args):
     """
     Read a pre-extracted feature TSV (or .gz) and distribute items to model workers.
-    Supports both MTM and BiLSTM output formats automatically.
 
     TSV columns (12):
         chrom, pos, strand, loc_in_strand, readname, read_loc,
@@ -372,7 +258,6 @@ def tsv_producer(tsv_file, queues, args):
     import random
     import gzip
 
-    is_mtm = (args.model_class == "mtm")
     n_workers = len(queues)
     BUF_SIZE = 128
     buffers = [[] for _ in range(n_workers)]
@@ -412,14 +297,8 @@ def tsv_producer(tsv_file, queues, args):
             )
             label = int(words[11])
 
-            if is_mtm:
-                # tag not stored in TSV → default 1 (no proximity filtering)
-                item = (sampleinfo, k_seq, k_signals, label, 1)
-            else:
-                means = np.array([float(x) for x in words[7].split(",")], dtype=np.float32)
-                stds  = np.array([float(x) for x in words[8].split(",")], dtype=np.float32)
-                lens  = np.array([int(x)   for x in words[9].split(",")], dtype=np.int32)
-                item  = (sampleinfo, k_seq, means, stds, lens, k_signals, label)
+            # tag not stored in TSV → default 1 (no proximity filtering)
+            item = (sampleinfo, k_seq, k_signals, label, 1)
 
             qid = random.randint(0, n_workers - 1)
             buffers[qid].append(item)
@@ -455,7 +334,7 @@ def inference_ultra(args):
     """
     Unified inference pipeline.
     - Input:  pod5 / slow5 / fast5 directory, or pre-extracted TSV file
-    - Model:  modelMTM (args.model_class='mtm') or ModelBiLSTM (args.model_class='bilstm')
+    - Model:  modelMTM
     - Device: all available GPUs; falls back to CPU when none found or --use_cpu set
     """
     mp.set_start_method("spawn", force=True)
@@ -563,7 +442,7 @@ def inference_ultra(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        "pyrameth call_mods – unified inference (modelMTM / BiLSTM)",
+        "pyrameth call_mods – unified inference (modelMTM)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
@@ -586,8 +465,8 @@ def main():
     p_model.add_argument("--model_path", "-m", required=True,
                          help="Path to trained model checkpoint (.ckpt)")
     p_model.add_argument("--model_class", type=str, default="mtm",
-                         choices=["mtm", "bilstm"],
-                         help="Model architecture: 'mtm' (modelMTM) or 'bilstm' (ModelBiLSTM)")
+                         choices=["mtm"],
+                         help="Model architecture: 'mtm' (modelMTM)")
     p_model.add_argument("--use_compile", type=str2bool, default="no",
                          help="Enable torch.compile (PyTorch >= 2.0, may speed up GPU inference)")
     p_model.add_argument("--use_cpu", action="store_true", default=False,
@@ -607,16 +486,6 @@ def main():
                       help="Base vocabulary size")
     p_hp.add_argument("--n_embed",      type=int,   default=4,
                       help="Base embedding dimension")
-
-    # ── BiLSTM-specific ────────────────────────────
-    p_lstm = parser.add_argument_group("BILSTM_HYPER")
-    p_lstm.add_argument("--hid_rnn",      type=int, default=256,
-                        help="Hidden size for BiLSTM")
-    p_lstm.add_argument("--layernum1",    type=int, default=3)
-    p_lstm.add_argument("--layernum2",    type=int, default=1)
-    p_lstm.add_argument("--is_base",      type=str, default="yes")
-    p_lstm.add_argument("--is_signallen", type=str, default="yes")
-    p_lstm.add_argument("--is_trace",     type=str, default="no")
 
     # ── MTM-specific ───────────────────────────────
     p_mtm = parser.add_argument_group("MTM_HYPER")
