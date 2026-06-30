@@ -1,4 +1,4 @@
-"""
+﻿"""
 call_modifications.py
 Unified inference entry point: inference_ultra()
 Supports: modelMTM; pod5 / slow5 / fast5 / tsv input; GPU / CPU
@@ -91,7 +91,7 @@ def _run_batch_mtm(batch_info, batch_k, batch_s, batch_t, args, device, model):
         batch_s : list of np.float32 (seq_len, signal_len)
         batch_t : list of int        (proximity tag)
     """
-    k_np = np.stack(batch_k)               # (B, L)   – one allocation
+    k_np = np.stack(batch_k)               # (B, L)   �?one allocation
     s_np = np.stack(batch_s)               # (B, L, S)
     B, L, S = s_np.shape
 
@@ -111,7 +111,7 @@ def _run_batch_mtm(batch_info, batch_k, batch_s, batch_t, args, device, model):
     tpos     = torch.arange(L * S, device=device).unsqueeze(0).expand(B, -1)  # (B, L*S)
     x_static = tags.unsqueeze(-1)                                              # (B, 1)
 
-    amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    amp_dtype = torch.bfloat16 if (device.type == "cuda" and torch.cuda.is_bf16_supported()) else torch.float16
     with torch.inference_mode(), torch.amp.autocast(device_type=device.type, dtype=amp_dtype, enabled=(device.type == "cuda")):
         logits = model(signals, kmer_expand, x_mask, tpos, x_static)
         probs  = torch.softmax(logits.float(), dim=-1)
@@ -218,7 +218,7 @@ def model_worker(rank, device, queue, pred_q, args, nproc_io):
             _t0 = _time.perf_counter()
         for sub in items:
             # sub = (sampleinfo, k_seq, k_signals_rect, label, tag)
-            # label (sub[3]) discarded – not needed for inference
+            # label (sub[3]) discarded �?not needed for inference
             batch_info.append(sub[0])
             batch_k.append(np.asarray(sub[1], dtype=np.int64))
             batch_s.append(np.asarray(sub[2], dtype=np.float32))
@@ -297,7 +297,7 @@ def tsv_producer(tsv_file, queues, args):
             )
             label = int(words[11])
 
-            # tag not stored in TSV → default 1 (no proximity filtering)
+            # tag not stored in TSV �?default 1 (no proximity filtering)
             item = (sampleinfo, k_seq, k_signals, label, 1)
 
             qid = random.randint(0, n_workers - 1)
@@ -324,6 +324,7 @@ def writer(out_file, pred_q):
             if item == "kill":
                 break
             f.write("\n".join(item) + "\n")
+            f.flush()
 
 
 # ─────────────────────────────────────────────
@@ -442,7 +443,7 @@ def inference_ultra(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        "pyrameth call_mods – unified inference (modelMTM)",
+        "pyrameth call_mods �?unified inference (modelMTM)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 

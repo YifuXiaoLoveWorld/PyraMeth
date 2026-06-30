@@ -409,7 +409,7 @@ def _infer_batch_mtm(batch_reads, args, device, model):
     tpos     = torch.arange(L * S, device=device).unsqueeze(0).expand(B, -1)
     x_static = tags.unsqueeze(-1)
 
-    amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    amp_dtype = torch.bfloat16 if (device.type == "cuda" and torch.cuda.is_bf16_supported()) else torch.float16
     with torch.inference_mode(), torch.amp.autocast(
         device_type=device.type, dtype=amp_dtype, enabled=(device.type == "cuda")
     ):
