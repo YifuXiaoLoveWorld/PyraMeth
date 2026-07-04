@@ -324,7 +324,7 @@ def writer(out_file, pred_q):
             if item == "kill":
                 break
             f.write("\n".join(item) + "\n")
-            f.flush()
+            #f.flush()
 
 
 # ─────────────────────────────────────────────
