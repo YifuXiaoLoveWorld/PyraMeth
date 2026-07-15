@@ -1,4 +1,5 @@
 include pyrameth/utils/*
+include pyrameth/model/*.ckpt
 include requirements.txt
 include README.rst
 include LICENSE

@@ -42,6 +42,12 @@ def main_call_freq(args):
     call_mods_frequency_to_file(args)
 
 
+def main_pipeline(args):
+    from .pipeline import run_pipeline
+
+    run_pipeline(args)
+
+
 def main_trainm(args):
     from .train_multigpu import train_multigpu
 
@@ -56,6 +62,7 @@ def main():
         "\t%(prog)s call_mods: call modifications\n"
         "\t%(prog)s call_freq: call frequency of modifications "
         "at genome level\n"
+        "\t%(prog)s pipeline: run read- and site-level calling end to end\n"
         "\t%(prog)s extract: extract features from corrected (tombo) "
         "fast5s for training or testing\n"
         "\t%(prog)s trainm: train multigpu\n"
@@ -81,6 +88,11 @@ def main():
     sub_call_freq = subparsers.add_parser(
         "call_freq", description="call frequency of modifications at genome level"
     )
+    sub_pipeline = subparsers.add_parser(
+        "pipeline",
+        description="end-to-end calling with automatic 4 kHz / 5 kHz model selection",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     sub_extract = subparsers.add_parser(
         "extract",
         description="extract features from corrected (tombo) fast5s for "
@@ -90,6 +102,29 @@ def main():
         "if the whole data is extremely large.",
     )
     sub_trainm = subparsers.add_parser("trainm", description="[EXPERIMENTAL]train a model using multi gpus")
+
+    # pipeline: intentionally minimal public interface ======================================
+    sub_pipeline.add_argument(
+        "--input_path", "-i", required=True,
+        help="signal directory (POD5/SloW5/BloW5/Fast5) or pre-extracted feature TSV",
+    )
+    sub_pipeline.add_argument(
+        "--bam", default=None,
+        help="aligned BAM with move tables; required for raw signal input",
+    )
+    sub_pipeline.add_argument(
+        "--result_file", "-o", required=True,
+        help="final sorted bedMethyl output path",
+    )
+    sub_pipeline.add_argument(
+        "--platform", required=True, choices=["4khz", "5khz"],
+        help="sequencing sampling rate; selects both bundled models automatically",
+    )
+    sub_pipeline.add_argument(
+        "--batch_size", "-b", type=int, default=500,
+        help="read-level inference batch size",
+    )
+    sub_pipeline.set_defaults(func=main_pipeline)
 
     # sub_call_mods =============================================================================================
     sc_input = sub_call_mods.add_argument_group("INPUT")

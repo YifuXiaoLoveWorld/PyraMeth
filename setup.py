@@ -74,6 +74,7 @@ setup(
     platforms='any',
     zip_safe=False,
     include_package_data=True,
+    package_data={'pyrameth': ['model/*.ckpt']},
     classifiers=[
         'Programming Language :: Python :: 3',
         'Programming Language :: Python :: 3.12',
