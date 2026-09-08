@@ -7,7 +7,6 @@ sequencing platform.
 
 from __future__ import annotations
 
-import os
 from argparse import Namespace
 from pathlib import Path
 
@@ -61,7 +60,7 @@ def _read_call_args(args, model_path: Path, result_file: Path) -> Namespace:
         use_compile=False,
         use_cpu=False,
         nproc_cpu=1,
-        nproc=min(10, os.cpu_count() or 1),
+        nproc=args.nproc,
         motifs="CG",
         mod_loc=0,
         positions=None,
@@ -128,6 +127,8 @@ def run_pipeline(args) -> None:
 
     if args.batch_size <= 0:
         raise ValueError("--batch_size must be greater than zero")
+    if args.nproc <= 0:
+        raise ValueError("--nproc must be greater than zero")
 
     result_file = Path(args.result_file).expanduser().resolve()
     result_file.parent.mkdir(parents=True, exist_ok=True)
@@ -137,6 +138,7 @@ def run_pipeline(args) -> None:
     print("[pipeline] platform: {}".format(args.platform))
     print("[pipeline] read-level model: {}".format(read_model.name))
     print("[pipeline] site-level model: {}".format(site_model.name))
+    print("[pipeline] IO workers (--nproc): {}".format(args.nproc))
     print("[pipeline] phase 1/2: calling read-level modifications")
     _call_read_modifications(_read_call_args(args, read_model, read_calls))
 

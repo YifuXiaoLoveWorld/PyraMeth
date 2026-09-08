@@ -46,12 +46,13 @@ pyrameth pipeline \
     --bam demo.bam \
     --result_file sample.frequency.bed \
     --platform 4khz \
-    --batch_size 800
+    --batch_size 800 \
+    --nproc 32
 ```
 
 Use `--platform 4khz` for 4 kHz data or `--platform 5khz` for 5 kHz data.
-Apart from the required input/output paths and platform, only `--batch_size` normally
-needs tuning. Its default value is `500`.
+Apart from the required input/output paths and platform, `--batch_size` (default `500`)
+and `--nproc` (default `10`, POD5/SloW5/Fast5 reader processes) are the usual knobs.
 
 The command produces two files in the output directory:
 

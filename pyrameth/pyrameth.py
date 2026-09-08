@@ -124,6 +124,10 @@ def main():
         "--batch_size", "-b", type=int, default=500,
         help="read-level inference batch size",
     )
+    sub_pipeline.add_argument(
+        "--nproc", "-p", type=int, default=10,
+        help="number of IO producer processes for reading POD5/SloW5/Fast5, default 10",
+    )
     sub_pipeline.set_defaults(func=main_pipeline)
 
     # sub_call_mods =============================================================================================
