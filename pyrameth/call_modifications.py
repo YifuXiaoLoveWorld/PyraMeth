@@ -132,8 +132,12 @@ def _run_batch_mtm(batch_info, batch_k, batch_s, batch_t, args, device, model):
                                     str(int(pred_np[i])), kmer5]))
 
     if device.type == "cuda":
+        # Keep PyTorch's CUDA caching allocator warm between batches.  Calling
+        # empty_cache() here forces repeated allocator work and can introduce
+        # synchronization stalls; it does not reduce the live tensor set
+        # needed by the next batch.  OOM recovery, if ever needed, should call
+        # empty_cache() at the retry boundary instead.
         del kmers, signals, tags, logits, probs, pred, kmer_expand, x_mask, false_mask
-        torch.cuda.empty_cache()
 
     return out_lines
 
@@ -389,6 +393,11 @@ def inference_ultra(args):
         from .utils_dataloader import producer
         file_type = detect_file_type(input_path, True)
         files = get_files(input_path, True, file_type)
+        # A producer builds a complete custom BAM read-id index at startup.
+        # Do not launch more producers than signal files, otherwise idle
+        # producers still pay the full BAM-index construction cost.
+        nproc_io = min(nproc_io, max(1, len(files)))
+        _nproc_io_actual = nproc_io
         LOGGER.info(f"Signal input: {len(files)} {file_type} files, "
                     f"{nproc_io} IO worker(s)")
 
