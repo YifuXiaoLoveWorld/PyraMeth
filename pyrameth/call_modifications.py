@@ -11,6 +11,7 @@ os.environ['OPENBLAS_NUM_THREADS'] = '1'
 
 import sys
 import argparse
+import time as _time
 import numpy as np
 import torch
 import torch.multiprocessing as mp
@@ -26,6 +27,7 @@ from .utils.process_utils import (
     get_motif_seqs, get_files, read_position_file,
     detect_file_type, get_logger,
 )
+from .utils_dataloader import FeatureBatchBuffer, pack_feature_batch, _profile_enabled, _append_profile
 LOGGER = get_logger(__name__)
 os.environ["MKL_THREADING_LAYER"] = "GNU"
 
@@ -91,13 +93,17 @@ def _run_batch_mtm(batch_info, batch_k, batch_s, batch_t, args, device, model):
         batch_s : list of np.float32 (seq_len, signal_len)
         batch_t : list of int        (proximity tag)
     """
-    k_np = np.stack(batch_k)               # (B, L)   �?one allocation
-    s_np = np.stack(batch_s)               # (B, L, S)
+    k_np = np.ascontiguousarray(np.stack(batch_k) if not isinstance(batch_k, np.ndarray) else batch_k)
+    s_np = np.ascontiguousarray(np.stack(batch_s) if not isinstance(batch_s, np.ndarray) else batch_s)
     B, L, S = s_np.shape
+    t_np = np.ascontiguousarray(np.asarray(batch_t, dtype=np.int64))
 
-    kmers   = torch.from_numpy(k_np).to(device, non_blocking=True)
-    signals = torch.from_numpy(s_np.reshape(B, L * S, 1)).to(device, non_blocking=True)
-    tags    = torch.tensor(batch_t, dtype=torch.long, device=device)
+    k_cpu = torch.from_numpy(k_np)
+    s_cpu = torch.from_numpy(s_np.reshape(B, L * S, 1))
+    t_cpu = torch.from_numpy(t_np)
+    kmers   = k_cpu.to(device, non_blocking=True)
+    signals = s_cpu.to(device, non_blocking=True)
+    tags    = t_cpu.to(device, non_blocking=True)
 
     # expand kmer codes to match signal time axis
     kmer_expand = kmers.unsqueeze(2).expand(-1, -1, S).reshape(B, -1)  # (B, L*S)
@@ -119,7 +125,7 @@ def _run_batch_mtm(batch_info, batch_k, batch_s, batch_t, args, device, model):
 
     probs_np = probs.cpu().numpy()
     pred_np  = pred.cpu().numpy()
-    kmers_np = kmers.cpu().numpy()
+    kmers_np = k_np
 
     out_lines = []
     for i in range(len(batch_info)):
@@ -161,22 +167,21 @@ def model_worker(rank, device, queue, pred_q, args, nproc_io):
     model = load_model_mtm(args, device)
     model.eval()
 
-    # ── per-worker timing (set DEEPSIGNAL_PROFILE=1 to enable) ────────────
-    import os, time as _time
-    _profile = os.environ.get("DEEPSIGNAL_PROFILE") == "1"
-    _t_assemble = _t_infer = _t_queue_get = 0.0
+    # ── per-worker timing (set PYRAMETH_PROFILE=1 or DEEPSIGNAL_PROFILE=1) ─
+    _profile = _profile_enabled()
+    _t_assemble = _t_infer = _t_queue_get = _t_queue_get_total = 0.0
     _n_batches = 0
+    _n_sites = 0
 
     # ── batch buffers ──────────────────────────────
-    batch_info = []
-    batch_k, batch_s = [], []
-    batch_t = []                                        # proximity tag
+    pending = FeatureBatchBuffer(args.batch_size)
     end_count = 0
 
-    def flush():
-        nonlocal _t_assemble, _t_infer, _n_batches
-        if not batch_info:
+    def flush(batch):
+        nonlocal _t_assemble, _t_infer, _t_queue_get, _t_queue_get_total, _n_batches, _n_sites
+        if batch is None:
             return
+        batch_info, batch_k, batch_s, batch_t = batch
         if _profile:
             _t0 = _time.perf_counter()
         lines = _run_batch_mtm(
@@ -188,19 +193,28 @@ def model_worker(rank, device, queue, pred_q, args, nproc_io):
                 torch.cuda.synchronize(device)
             _t_infer += _time.perf_counter() - _t0
             _n_batches += 1
+            _n_sites += len(batch_info)
             if _n_batches % 20 == 0:
-                b = len(batch_info)
+                rec = {
+                    "batches": _n_batches,
+                    "sites": _n_sites,
+                    "assemble_ms_per_batch": _t_assemble * 1e3 / 20,
+                    "infer_ms_per_batch": _t_infer * 1e3 / 20,
+                    "queue_get_ms_per_20": _t_queue_get * 1e3,
+                    "last_batch_size": len(batch_info),
+                }
                 print(
                     f"[Worker-{rank}({device})] {_n_batches} batches | "
-                    f"assemble {_t_assemble*1e3/20:.2f} ms/b | "
-                    f"infer {_t_infer*1e3/20:.2f} ms/b | "
-                    f"last_batch_size {b}",
+                    f"assemble {rec['assemble_ms_per_batch']:.2f} ms/b | "
+                    f"infer {rec['infer_ms_per_batch']:.2f} ms/b | "
+                    f"queue_get {rec['queue_get_ms_per_20']:.1f} ms/20b | "
+                    f"last_batch_size {rec['last_batch_size']}",
                     flush=True,
                 )
-                _t_assemble = _t_infer = 0.0
+                _append_profile("worker", rec)
+                _t_assemble = _t_infer = _t_queue_get = 0.0
         if lines:
             pred_q.put(lines)
-        batch_info.clear(); batch_k.clear(); batch_s.clear(); batch_t.clear()
 
     # ── main loop ──────────────────────────────────
     while True:
@@ -208,7 +222,9 @@ def model_worker(rank, device, queue, pred_q, args, nproc_io):
             _t0 = _time.perf_counter()
         item = queue.get()
         if _profile:
-            _t_queue_get += _time.perf_counter() - _t0
+            dt = _time.perf_counter() - _t0
+            _t_queue_get += dt
+            _t_queue_get_total += dt
 
         if item is None:
             end_count += 1
@@ -216,32 +232,28 @@ def model_worker(rank, device, queue, pred_q, args, nproc_io):
                 break
             continue
 
-        items = item if isinstance(item, list) else [item]
-
         if _profile:
             _t0 = _time.perf_counter()
-        for sub in items:
-            # sub = (sampleinfo, k_seq, k_signals_rect, label, tag)
-            # label (sub[3]) discarded �?not needed for inference
-            batch_info.append(sub[0])
-            batch_k.append(np.asarray(sub[1], dtype=np.int64))
-            batch_s.append(np.asarray(sub[2], dtype=np.float32))
-            batch_t.append(sub[4])
-
-            if len(batch_info) >= args.batch_size:
-                if _profile:
-                    _t_assemble += _time.perf_counter() - _t0
-                flush()
-                if _profile:
-                    _t0 = _time.perf_counter()
+        for batch in pending.push(item):
+            if _profile:
+                _t_assemble += _time.perf_counter() - _t0
+            flush(batch)
+            if _profile:
+                _t0 = _time.perf_counter()
         if _profile:
             _t_assemble += _time.perf_counter() - _t0
 
     # flush tail batch
-    flush()
+    flush(pending.finish())
     if _profile:
+        _append_profile("worker", {
+            "event": "done",
+            "batches": _n_batches,
+            "sites": _n_sites,
+            "queue_wait_ms": _t_queue_get_total * 1e3,
+        })
         print(
-            f"[Worker-{rank}({device})] total queue_wait {_t_queue_get*1e3:.0f} ms",
+            f"[Worker-{rank}({device})] total queue_wait {_t_queue_get_total*1e3:.0f} ms",
             flush=True,
         )
     print(f"[Worker-{rank}({device})] done", flush=True)
@@ -259,12 +271,12 @@ def tsv_producer(tsv_file, queues, args):
         chrom, pos, strand, loc_in_strand, readname, read_loc,
         k_mer, signal_means, signal_stds, signal_lens, k_signals_rect, label
     """
-    import random
     import gzip
 
     n_workers = len(queues)
-    BUF_SIZE = 128
+    BUF_SIZE = max(1, int(getattr(args, "batch_size", 128) or 128))
     buffers = [[] for _ in range(n_workers)]
+    rr = 0
     chrom_args = getattr(args, "chrom", None) or []
     chrom_include = {c for c in chrom_args if not c.startswith("no")}
     chrom_exclude = {c[2:] for c in chrom_args if c.startswith("no")}
@@ -304,15 +316,16 @@ def tsv_producer(tsv_file, queues, args):
             # tag not stored in TSV �?default 1 (no proximity filtering)
             item = (sampleinfo, k_seq, k_signals, label, 1)
 
-            qid = random.randint(0, n_workers - 1)
+            qid = rr % n_workers
+            rr += 1
             buffers[qid].append(item)
             if len(buffers[qid]) >= BUF_SIZE:
-                queues[qid].put(buffers[qid])
+                queues[qid].put(pack_feature_batch(buffers[qid]))
                 buffers[qid] = []
 
     for qid in range(n_workers):
         if buffers[qid]:
-            queues[qid].put(buffers[qid])
+            queues[qid].put(pack_feature_batch(buffers[qid]))
 
     print("[TSV-Producer] done", flush=True)
 
@@ -366,9 +379,9 @@ def inference_ultra(args):
 
     n_workers = len(devices)
     nproc_io  = max(1, args.nproc)
-
-    queues = [mp.Queue(256) for _ in range(n_workers)]
-    pred_q = mp.Queue(512)
+    q_depth = max(8, min(64, 32768 // max(1, args.batch_size)))
+    queues = [mp.Queue(q_depth) for _ in range(n_workers)]
+    pred_q = mp.Queue(max(64, q_depth * 2))
 
     # ── detect input type ─────────────────────────
     input_path = args.input_path
@@ -391,6 +404,7 @@ def inference_ultra(args):
 
     else:
         from .utils_dataloader import producer
+        from .utils.bam_reader import ensure_read_index
         file_type = detect_file_type(input_path, True)
         files = get_files(input_path, True, file_type)
         # A producer builds a complete custom BAM read-id index at startup.
@@ -403,6 +417,9 @@ def inference_ultra(args):
 
         motif_seqs = get_motif_seqs(args.motifs, True)
         positions  = read_position_file(args.positions) if args.positions else None
+        args.bam_index_dir = os.path.dirname(os.path.abspath(args.result_file)) or "."
+        cache_path = ensure_read_index(args.bam, fallback_dir=args.bam_index_dir)
+        LOGGER.info("BAM read-id index ready: %s", cache_path)
 
         for i in range(nproc_io):
             p = mp.Process(
