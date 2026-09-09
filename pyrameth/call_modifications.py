@@ -65,7 +65,10 @@ def load_model_mtm(args, device):
     model = model.to(device)
     model.eval()
 
-    if getattr(args, "use_compile", False):
+    _use_compile = getattr(args, "use_compile", False)
+    if isinstance(_use_compile, str):
+        _use_compile = str2bool(_use_compile)
+    if _use_compile:
         if device.type == "cpu":
             LOGGER.warning(
                 "torch.compile skipped on CPU: the inductor backend generates "

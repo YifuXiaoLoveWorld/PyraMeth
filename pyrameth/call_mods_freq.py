@@ -127,53 +127,90 @@ def _get_normalized_histo(probs, binsize=20):
     return np.round(hist / (norm + 1e-8), 6)
 
 
-def _prepare_data(mods_files, prob_cf=0.0, cov_cf=4, bin_size=20):
-    """Read per-read calls from one or more TSV files, group by (chrom, pos).
-
-    Returns all positions for inference plus a separate anchor set (cov >= cov_cf)
-    used as window context so low-coverage sites never pollute their neighbors.
-    """
-    from collections import defaultdict, Counter
+def _normalize_bin_counts(counts):
+    """L2-normalize integer histogram counts; matches np.histogram then norm."""
     import numpy as np
+    hist = np.asarray(counts, dtype=np.float64)
+    if hist.sum() <= 0:
+        return None
+    norm = np.linalg.norm(hist)
+    return np.round(hist / (norm + 1e-8), 6)
 
-    chrom_pos_data = defaultdict(lambda: defaultdict(lambda: {'probs': [], 'strands': []}))
+
+def _prepare_data(mods_files, prob_cf=0.0, cov_cf=4, bin_size=20):
+    """Read per-read calls and accumulate per-site histograms.
+
+    Probabilities are binned online (same edges as np.histogram range=[0, 1])
+    so the caller does not keep one Python float per read.  That is required
+    for ~100 GiB read-level TSVs; storing every probability OOMs.
+    """
+    from collections import defaultdict
+
+    # site record: bin_size counts, n_plus, n_minus, first_strand (0 unset, 1 +, 2 -)
+    n_fields = bin_size + 3
+    chrom_sites = defaultdict(lambda: defaultdict(lambda: [0] * n_fields))
     count, used = 0, 0
+    plus_idx = bin_size
+    minus_idx = bin_size + 1
+    first_idx = bin_size + 2
 
     for mods_file in mods_files:
         with _open_file(mods_file) as f:
             for line in f:
-                words = line.strip().split('\t')
-                if len(words) < 9:
-                    continue
-                try:
-                    mod_record = ModRecord(words)
-                except (ValueError, IndexError):
-                    continue
-                if not mod_record.is_record_callable(prob_cf):
+                words = line.split('\t')
+                if len(words) < 8:
                     count += 1
                     continue
-                chrom_pos_data[mod_record._chromosome][mod_record._pos][
-                    'probs'].append(mod_record._prob_1)
-                chrom_pos_data[mod_record._chromosome][mod_record._pos][
-                    'strands'].append(mod_record._strand)
+                try:
+                    pos = int(words[1])
+                    p0 = float(words[6])
+                    p1 = float(words[7])
+                except (ValueError, IndexError):
+                    count += 1
+                    continue
                 count += 1
+                if prob_cf > 0.0 and abs(p0 - p1) < prob_cf:
+                    continue
+                site = chrom_sites[words[0]][pos]
+                strand = words[2]
+                if site[first_idx] == 0:
+                    site[first_idx] = 1 if strand == '+' else 2
+                bin_i = int(p1 * bin_size)
+                if bin_i >= bin_size:
+                    bin_i = bin_size - 1
+                elif bin_i < 0:
+                    bin_i = 0
+                site[bin_i] += 1
+                if strand == '+':
+                    site[plus_idx] += 1
+                else:
+                    site[minus_idx] += 1
                 used += 1
+                if used % 2000000 == 0:
+                    print("[call_freq] parsed {} calls..".format(used), flush=True)
 
     print("{:.2f}% ({} of {}) calls used..".format(
-        used / float(count) * 100 if count else 0, used, count))
+        used / float(count) * 100 if count else 0, used, count), flush=True)
+    print("[call_freq] {} chromosomes, {} sites".format(
+        len(chrom_sites), sum(len(v) for v in chrom_sites.values())), flush=True)
 
     result = {}
-    for chrom, pos_dict in chrom_pos_data.items():
+    for chrom, pos_dict in chrom_sites.items():
         positions, histograms, coverages, strands = [], [], [], []
         anchor_positions, anchor_histograms = [], []
 
         for refpos in sorted(pos_dict.keys()):
-            item = pos_dict[refpos]
-            cov = len(item['probs'])
-            hist = _get_normalized_histo(item['probs'], bin_size)
+            rec = pos_dict[refpos]
+            cov = rec[plus_idx] + rec[minus_idx]
+            hist = _normalize_bin_counts(rec[:bin_size])
             if hist is None:
                 continue
-            strand = Counter(item['strands']).most_common(1)[0][0]
+            if rec[plus_idx] > rec[minus_idx]:
+                strand = '+'
+            elif rec[minus_idx] > rec[plus_idx]:
+                strand = '-'
+            else:
+                strand = '+' if rec[first_idx] == 1 else '-'
 
             positions.append(refpos)
             histograms.append(hist)
@@ -253,28 +290,28 @@ def _run_aggr_model(positions, histograms, anchor_positions, anchor_histograms,
     # Left neighbors in padded array: indices [k, k+1, ..., k+pad_len-1]
     # Right neighbors: [k+pad_len, ...] for non-anchors, [k+pad_len+1, ...] for anchors
     right_start = insert_idx + np.where(is_anchor, pad_len + 1, pad_len)  # (N,)
-
-    left_idx  = insert_idx[:, None]  + np.arange(pad_len, dtype=np.int64)[None, :]  # (N, pad_len)
-    right_idx = right_start[:, None] + np.arange(pad_len, dtype=np.int64)[None, :]  # (N, pad_len)
-
-    left_hists  = padded_anchor_hist[left_idx]   # (N, pad_len, bin_size)
-    right_hists = padded_anchor_hist[right_idx]  # (N, pad_len, bin_size)
-
-    hist_windows = np.concatenate(
-        [left_hists, all_hist_arr[:, None, :], right_hists], axis=1
-    )  # (N, seq_len, bin_size)
-
-    left_pos  = padded_anchor_pos[left_idx]   # (N, pad_len)
-    right_pos = padded_anchor_pos[right_idx]  # (N, pad_len)
-    window_pos = np.concatenate(
-        [left_pos, all_pos_arr[:, None], right_pos], axis=1
-    )  # (N, seq_len)
-    pos_dist = np.abs(window_pos - all_pos_arr[:, None]).astype(np.float32)
+    arange_pad = np.arange(pad_len, dtype=np.int64)
 
     new_probs = []
     for i in range(0, N, batch_size):
-        b_hist = torch.from_numpy(hist_windows[i:i + batch_size]).to(device)
-        b_pos  = torch.from_numpy(pos_dist[i:i + batch_size]).to(device)
+        sl = slice(i, i + batch_size)
+        left_idx = insert_idx[sl, None] + arange_pad
+        right_idx = right_start[sl, None] + arange_pad
+        hist_windows = np.concatenate(
+            [padded_anchor_hist[left_idx],
+             all_hist_arr[sl, None, :],
+             padded_anchor_hist[right_idx]],
+            axis=1,
+        )
+        window_pos = np.concatenate(
+            [padded_anchor_pos[left_idx],
+             all_pos_arr[sl, None],
+             padded_anchor_pos[right_idx]],
+            axis=1,
+        )
+        pos_dist = np.abs(window_pos - all_pos_arr[sl, None]).astype(np.float32)
+        b_hist = torch.from_numpy(hist_windows).to(device, non_blocking=True)
+        b_pos = torch.from_numpy(pos_dist).to(device, non_blocking=True)
         with torch.no_grad():
             outputs = model(b_pos, b_hist)
             probs = outputs.clamp(0.0, 1.0).cpu().numpy().flatten()
@@ -329,10 +366,15 @@ def call_mods_frequency_to_file(args):
         is_sort  = getattr(args, 'sort', False)
 
         aggre_hidden = getattr(args, 'aggre_hidden', 32)
-        print("loading aggregate model from {}..".format(aggre_model_path))
+        use_gpu = torch.cuda.is_available()
+        aggr_device = 0 if use_gpu else "cpu"
+        print("loading aggregate model from {}..".format(aggre_model_path), flush=True)
+        print("[call_freq] aggregate device: {}".format(
+            "cuda:0" if use_gpu else "cpu"), flush=True)
         model = AggrAttRNN(seq_len=11, num_layers=1, num_classes=1,
                            dropout_rate=0, hidden_size=aggre_hidden,
-                           binsize=bin_size, model_type='attbigru', device='cpu')
+                           binsize=bin_size, model_type='attbigru',
+                           device=aggr_device)
         checkpoint = torch.load(aggre_model_path, map_location='cpu', weights_only=True)
         try:
             model.load_state_dict(checkpoint)
@@ -342,22 +384,30 @@ def call_mods_frequency_to_file(args):
                 for k, v in checkpoint.items()
             )
             model.load_state_dict(new_sd)
+        if use_gpu:
+            model = model.cuda(0)
         model.eval()
 
-        print("reading input files..")
+        print("reading input files..", flush=True)
+        t_read = time.time()
         data_dict = _prepare_data(mods_files, prob_cf=prob_cf,
                                   cov_cf=cov_cf, bin_size=bin_size)
+        print("[call_freq] grouped in {:.1f}s".format(time.time() - t_read), flush=True)
 
-        print("running AggrAttRNN inference..")
+        print("running AggrAttRNN inference..", flush=True)
+        infer_bs = 4096 if use_gpu else 1024
         refined = {}
         for chrom, info in data_dict.items():
+            t_inf = time.time()
             refined[chrom] = _run_aggr_model(
                 info['positions'], info['histograms'],
                 info['anchor_positions'], info['anchor_histograms'],
-                model,
+                model, batch_size=infer_bs,
             )
+            print("[call_freq] {} {} sites in {:.1f}s".format(
+                chrom, len(info['positions']), time.time() - t_inf), flush=True)
 
-        print("writing bedMethyl..")
+        print("writing bedMethyl..", flush=True)
         _write_bedmethyl_aggr(data_dict, refined, args.result_file, is_sort=is_sort)
 
     else:
