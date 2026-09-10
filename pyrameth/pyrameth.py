@@ -128,6 +128,10 @@ def main():
         "--nproc", "-p", type=int, default=10,
         help="number of IO producer processes for reading POD5/SloW5/Fast5, default 10",
     )
+    sub_pipeline.add_argument(
+        "--use_compile", type=str, default="no",
+        help="use torch.compile for read-level GPU inference, yes or no, default no",
+    )
     sub_pipeline.set_defaults(func=main_pipeline)
 
     # sub_call_mods =============================================================================================

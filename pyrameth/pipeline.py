@@ -57,7 +57,7 @@ def _read_call_args(args, model_path: Path, result_file: Path) -> Namespace:
         mtm_norm_first="True",
         mtm_down_mode="concat",
         mtm_temporal_depth=2,
-        use_compile=False,
+        use_compile=getattr(args, "use_compile", "no"),
         use_cpu=False,
         nproc_cpu=1,
         nproc=args.nproc,
@@ -139,6 +139,9 @@ def run_pipeline(args) -> None:
     print("[pipeline] read-level model: {}".format(read_model.name))
     print("[pipeline] site-level model: {}".format(site_model.name))
     print("[pipeline] IO workers (--nproc): {}".format(args.nproc))
+    print("[pipeline] torch.compile (--use_compile): {}".format(
+        getattr(args, "use_compile", "no")
+    ))
     print("[pipeline] phase 1/2: calling read-level modifications")
     _call_read_modifications(_read_call_args(args, read_model, read_calls))
 
