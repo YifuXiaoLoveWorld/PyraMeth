@@ -67,9 +67,9 @@ def _read_call_args(args, model_path: Path, result_file: Path) -> Namespace:
         chrom=None,
         normalize_method="mad",
         methy_label=1,
-        mapq=1,
+        mapq=getattr(args, "mapq", 1),
         identity=0.0,
-        coverage_ratio=0.5,
+        coverage_ratio=getattr(args, "coverage_ratio", 0.5),
         plant=False,
         single=False,
         recursively="yes",
@@ -142,6 +142,8 @@ def run_pipeline(args) -> None:
     print("[pipeline] torch.compile (--use_compile): {}".format(
         getattr(args, "use_compile", "no")
     ))
+    print("[pipeline] mapq: {}".format(getattr(args, "mapq", 1)))
+    print("[pipeline] coverage_ratio: {}".format(getattr(args, "coverage_ratio", 0.5)))
     print("[pipeline] phase 1/2: calling read-level modifications")
     _call_read_modifications(_read_call_args(args, read_model, read_calls))
 

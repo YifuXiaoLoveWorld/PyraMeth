@@ -132,6 +132,14 @@ def main():
         "--use_compile", type=str, default="no",
         help="use torch.compile for read-level GPU inference, yes or no, default no",
     )
+    sub_pipeline.add_argument(
+        "--mapq", type=int, default=1,
+        help="minimum MAPQ to keep a BAM alignment, default 1",
+    )
+    sub_pipeline.add_argument(
+        "--coverage_ratio", type=float, default=0.5,
+        help="minimum aligned-signal coverage ratio to keep a read, default 0.5",
+    )
     sub_pipeline.set_defaults(func=main_pipeline)
 
     # sub_call_mods =============================================================================================
