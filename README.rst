@@ -4,6 +4,10 @@ PyraMeth
 
 Release
 -------
+0.1.6
+debug cache and compile
+
+-------
 0.1.5
 add slow5/blow5 interface
 
