@@ -1,0 +1,4 @@
+{
+  "name": "PyraMeth",
+  "install": "bash .cursor/install.sh"
+}
