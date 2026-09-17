@@ -42,6 +42,20 @@ def main_call_freq(args):
     call_mods_frequency_to_file(args)
 
 
+def main_filter_reads(args):
+    from .filter_reads import filter_read_calls_from_args
+
+    display_args(args)
+    filter_read_calls_from_args(args)
+
+
+def main_bed_stats(args):
+    from .bed_stats import bed_stats_from_args
+
+    display_args(args)
+    bed_stats_from_args(args)
+
+
 def main_pipeline(args):
     from .pipeline import run_pipeline
 
@@ -62,6 +76,8 @@ def main():
         "\t%(prog)s call_mods: call modifications\n"
         "\t%(prog)s call_freq: call frequency of modifications "
         "at genome level\n"
+        "\t%(prog)s filter_reads: keep call_mods rows for a read-ID list\n"
+        "\t%(prog)s bed_stats: summarise / compare methylation BED files\n"
         "\t%(prog)s pipeline: run read- and site-level calling end to end\n"
         "\t%(prog)s extract: extract features from corrected (tombo) "
         "fast5s for training or testing\n"
@@ -87,6 +103,14 @@ def main():
     )
     sub_call_freq = subparsers.add_parser(
         "call_freq", description="call frequency of modifications at genome level"
+    )
+    sub_filter_reads = subparsers.add_parser(
+        "filter_reads",
+        description="keep call_mods TSV rows whose read names are in a read-ID list",
+    )
+    sub_bed_stats = subparsers.add_parser(
+        "bed_stats",
+        description="summarise methylation BED/TSV files and compare why one is larger",
     )
     sub_pipeline = subparsers.add_parser(
         "pipeline",
@@ -635,6 +659,64 @@ def main():
     )
 
     sub_call_freq.set_defaults(func=main_call_freq)
+
+    # sub_filter_reads ===============================================================================
+    sfr_input = sub_filter_reads.add_argument_group("INPUT")
+    sfr_input.add_argument(
+        "--input_path",
+        "-i",
+        type=str,
+        required=True,
+        help="call_mods TSV from call_mods/pipeline (.tsv or .tsv.gz)",
+    )
+    sfr_input.add_argument(
+        "--read_ids",
+        type=str,
+        required=True,
+        help="allowlist of read IDs, one per line (.txt or .txt.gz)",
+    )
+    sfr_output = sub_filter_reads.add_argument_group("OUTPUT")
+    sfr_output.add_argument(
+        "--result_file",
+        "-o",
+        type=str,
+        required=True,
+        help="filtered TSV path (.tsv or .tsv.gz)",
+    )
+    sfr_cal = sub_filter_reads.add_argument_group("FILTER")
+    sfr_cal.add_argument(
+        "--read_col",
+        type=int,
+        default=4,
+        help="0-based column of the read name, default 4",
+    )
+    sub_filter_reads.set_defaults(func=main_filter_reads)
+
+    # sub_bed_stats ==================================================================================
+    sbs_input = sub_bed_stats.add_argument_group("INPUT")
+    sbs_input.add_argument(
+        "--input_path",
+        "-i",
+        action="append",
+        required=True,
+        help="BED or TSV path. Pass twice to compare a large file against a small one.",
+    )
+    sbs_output = sub_bed_stats.add_argument_group("OUTPUT")
+    sbs_output.add_argument(
+        "--result_file",
+        "-o",
+        type=str,
+        default=None,
+        help="optional report output path",
+    )
+    sbs_cal = sub_bed_stats.add_argument_group("OPTIONS")
+    sbs_cal.add_argument(
+        "--sites",
+        action="store_true",
+        default=False,
+        help="collect unique chrom:pos:strand keys for overlap (uses more RAM)",
+    )
+    sub_bed_stats.set_defaults(func=main_bed_stats)
 
     # sub_extract ============================================================================
     se_input = sub_extract.add_argument_group("INPUT")
